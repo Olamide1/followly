@@ -1,0 +1,378 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-canvas text-ink-900 font-sans;
+    letter-spacing: 0.01em;
+  }
+  
+  /* Agnes Martin grid pattern background - horizontal and vertical */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+      /* Horizontal lines - Agnes Martin's signature */
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 23px,
+        rgba(224, 224, 222, 0.25) 23px,
+        rgba(224, 224, 222, 0.25) 24px
+      ),
+      /* Vertical lines - grid structure */
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 23px,
+        rgba(224, 224, 222, 0.15) 23px,
+        rgba(224, 224, 222, 0.15) 24px
+      );
+    pointer-events: none;
+    z-index: 0;
+  }
+  
+  /* Subtle texture overlay - pencil-drawn quality */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+      radial-gradient(circle at 20% 50%, rgba(250, 250, 248, 0.1) 0%, transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(250, 250, 248, 0.1) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+}
+
+@layer components {
+  /* Agnes Martin inspired buttons - geometric, minimal */
+  .btn {
+    @apply px-6 py-2.5 font-normal tracking-wide transition-all;
+    @apply border border-grid-medium bg-paper;
+    @apply text-ink-700;
+    letter-spacing: 0.05em;
+  }
+  
+  .btn:hover {
+    @apply border-ink-400 bg-canvas;
+  }
+  
+  .btn-primary {
+    @apply bg-ink-900 text-paper border-ink-900;
+  }
+  
+  .btn-primary:hover {
+    @apply bg-ink-800 border-ink-800;
+  }
+  
+  .btn-secondary {
+    @apply bg-canvas border-grid-medium text-ink-700;
+  }
+  
+  .btn-ghost {
+    @apply bg-transparent border-transparent text-ink-600;
+  }
+  
+  .btn-ghost:hover {
+    @apply text-ink-900 bg-canvas;
+  }
+  
+  /* Inputs - minimal, grid-aligned */
+  .input {
+    @apply w-full px-4 py-2.5;
+    @apply border-b border-grid-medium bg-transparent;
+    @apply text-ink-900 placeholder-ink-400;
+    @apply focus:outline-none focus:border-ink-600;
+    letter-spacing: 0.02em;
+  }
+  
+  /* Cards - no rounded corners, subtle borders */
+  .card {
+    @apply bg-paper border border-grid-light p-8;
+    @apply relative;
+  }
+  
+  /* Grid line separator - Agnes Martin style */
+  .grid-line {
+    @apply border-t border-grid-medium;
+    position: relative;
+  }
+  
+  /* Vertical grid divider */
+  .grid-divider-vertical {
+    @apply border-l border-grid-medium;
+  }
+  
+  /* Square grid block - Agnes Martin composition */
+  .grid-block {
+    @apply border border-grid-light bg-paper;
+    position: relative;
+  }
+  
+  /* Subtle grid accent - very fine line */
+  .grid-accent {
+    @apply border-t border-grid-light;
+    border-width: 0.5px;
+  }
+  
+  /* Page headers - generous spacing, mobile responsive */
+  .page-header {
+    @apply mb-8 sm:mb-12 lg:mb-16;
+  }
+  
+  .page-title {
+    @apply text-2xl sm:text-3xl font-normal text-ink-900 mb-2 sm:mb-3;
+    letter-spacing: 0.05em;
+    font-weight: 400;
+  }
+  
+  .page-description {
+    @apply text-ink-600 text-sm sm:text-base;
+    letter-spacing: 0.02em;
+  }
+  
+  /* Navigation - minimal, grid-aligned */
+  .nav-link {
+    @apply text-ink-600 text-sm font-normal tracking-wide;
+    @apply border-b-2 border-transparent pb-2;
+    letter-spacing: 0.08em;
+  }
+  
+  .nav-link.active {
+    @apply text-ink-900 border-ink-900;
+  }
+  
+  /* Table - minimal grid structure */
+  .table-grid {
+    @apply border-collapse;
+  }
+  
+  .table-grid th {
+    @apply text-left text-xs font-normal text-ink-500 uppercase tracking-wider;
+    @apply border-b border-grid-medium pb-3;
+    letter-spacing: 0.1em;
+  }
+  
+  .table-grid td {
+    @apply border-b border-grid-light py-4 text-ink-700;
+  }
+  
+  /* Stat cards - minimal, grid-based */
+  .stat-card {
+    @apply bg-paper border-l-2 border-ink-900 pl-4 sm:pl-6 py-4;
+  }
+  
+  .stat-label {
+    @apply text-xs text-ink-500 uppercase tracking-wider mb-1;
+    letter-spacing: 0.1em;
+  }
+  
+  .stat-value {
+    @apply text-2xl sm:text-3xl font-light text-ink-900;
+    letter-spacing: -0.02em;
+  }
+  
+  /* Mobile touch targets - Agnes Martin minimal but accessible */
+  @media (max-width: 640px) {
+    .btn {
+      @apply min-h-[44px] px-4;
+    }
+    
+    .nav-link {
+      @apply min-h-[44px] flex items-center;
+    }
+    
+    /* Reduce grid pattern intensity on mobile for performance */
+    body::before {
+      background-image: 
+        repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 30px,
+          rgba(224, 224, 222, 0.2) 30px,
+          rgba(224, 224, 222, 0.2) 31px
+        );
+    }
+  }
+  
+  /* Agnes Martin square compositions */
+  .square-grid {
+    @apply grid gap-px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+  
+  /* Very fine line - pencil quality */
+  .fine-line {
+    border-width: 0.5px;
+    @apply border-grid-medium;
+  }
+}
+
+/* WYSIWYG Editor styling */
+.wysiwyg-editor {
+  @apply text-ink-900;
+  line-height: 1.6;
+  min-height: 300px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.wysiwyg-editor:empty:before {
+  content: 'Start typing your email content here...';
+  @apply text-ink-400 italic;
+  pointer-events: none;
+  display: block;
+}
+
+.wysiwyg-editor:focus {
+  outline: none;
+}
+
+.wysiwyg-editor:focus:empty:before {
+  content: '';
+}
+
+/* Ensure content is visible */
+.wysiwyg-editor * {
+  max-width: 100%;
+}
+
+[contenteditable="true"] p {
+  @apply mb-4;
+}
+
+[contenteditable="true"] a {
+  @apply text-ink-900 underline;
+  text-decoration-color: rgba(0, 0, 0, 0.3);
+}
+
+[contenteditable="true"] img {
+  @apply max-w-full h-auto my-4;
+  display: block;
+}
+
+[contenteditable="true"] h1,
+[contenteditable="true"] h2,
+[contenteditable="true"] h3 {
+  @apply font-light mb-3 mt-6;
+}
+
+[contenteditable="true"] h1 {
+  @apply text-2xl;
+}
+
+[contenteditable="true"] h2 {
+  @apply text-xl;
+}
+
+[contenteditable="true"] h3 {
+  @apply text-lg;
+}
+
+[contenteditable="true"] ul,
+[contenteditable="true"] ol {
+  @apply ml-6 mb-4;
+  list-style-position: outside;
+}
+
+[contenteditable="true"] ul {
+  list-style-type: disc;
+}
+
+[contenteditable="true"] ol {
+  list-style-type: decimal;
+}
+
+[contenteditable="true"] li {
+  @apply mb-2;
+  line-height: 1.6;
+}
+
+[contenteditable="true"] strong {
+  @apply font-normal;
+  font-weight: 500;
+}
+
+[contenteditable="true"] em {
+  font-style: italic;
+}
+
+/* Email preview styling */
+.email-preview {
+  @apply text-ink-900;
+  line-height: 1.6;
+}
+
+.email-preview p {
+  @apply mb-4;
+}
+
+.email-preview a {
+  @apply text-ink-900 underline;
+  text-decoration-color: rgba(0, 0, 0, 0.3);
+}
+
+.email-preview a:hover {
+  @apply text-ink-700;
+}
+
+.email-preview img {
+  @apply max-w-full h-auto my-4;
+  display: block;
+}
+
+.email-preview h1,
+.email-preview h2,
+.email-preview h3 {
+  @apply font-light mb-3 mt-6;
+}
+
+.email-preview ul,
+.email-preview ol {
+  @apply ml-6 mb-4;
+  list-style-position: outside;
+}
+
+.email-preview ul {
+  list-style-type: disc;
+}
+
+.email-preview ol {
+  list-style-type: decimal;
+}
+
+.email-preview li {
+  @apply mb-2;
+  line-height: 1.6;
+}
+
+.email-preview h1 {
+  @apply text-2xl font-light mb-4 mt-6;
+}
+
+.email-preview h2 {
+  @apply text-xl font-light mb-3 mt-5;
+}
+
+.email-preview h3 {
+  @apply text-lg font-light mb-3 mt-4;
+}
+
+.email-preview strong {
+  @apply font-normal;
+  font-weight: 500;
+}
+
+.email-preview em {
+  font-style: italic;
+}
+
