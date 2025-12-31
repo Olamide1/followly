@@ -283,20 +283,166 @@ function updateContentFromEditor() {
   }
 }
 
-// Handle paste events - clean up pasted content
+// Sanitize HTML for email compatibility
+function sanitizeHtml(html: string): string {
+  // Create a temporary div to parse and clean HTML
+  const tempDiv = document.createElement('div')
+  tempDiv.innerHTML = html
+
+  // Remove dangerous elements
+  const dangerousElements = tempDiv.querySelectorAll('script, style, iframe, object, embed, form, input, button')
+  dangerousElements.forEach(el => el.remove())
+
+  // Remove dangerous attributes but keep safe ones
+  const allElements = tempDiv.querySelectorAll('*')
+  allElements.forEach(el => {
+    // Remove event handlers (onclick, onerror, etc.)
+    Array.from(el.attributes).forEach(attr => {
+      if (attr.name.startsWith('on')) {
+        el.removeAttribute(attr.name)
+      }
+    })
+
+    // Keep safe attributes, remove others
+    const safeAttrs = ['href', 'src', 'alt', 'title', 'width', 'height', 'class', 'id', 'style']
+    const attributes = Array.from(el.attributes)
+    attributes.forEach(attr => {
+      if (!safeAttrs.includes(attr.name.toLowerCase())) {
+        el.removeAttribute(attr.name)
+      }
+    })
+  })
+
+  // Clean up inline styles - keep only email-safe styles
+  allElements.forEach(el => {
+    if (el instanceof HTMLElement && el.style) {
+      const allowedStyles: string[] = []
+      const style = el.style
+
+      // Keep font-weight for bold
+      if (style.fontWeight && (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700)) {
+        allowedStyles.push('font-weight: bold')
+      }
+
+      // Keep font-style for italic
+      if (style.fontStyle === 'italic') {
+        allowedStyles.push('font-style: italic')
+      }
+
+      // Keep text-decoration for underline
+      if (style.textDecoration && style.textDecoration.includes('underline')) {
+        allowedStyles.push('text-decoration: underline')
+      }
+
+      // Keep color (for links and text)
+      if (style.color) {
+        allowedStyles.push(`color: ${style.color}`)
+      }
+
+      // Keep background-color (for highlighting)
+      if (style.backgroundColor && style.backgroundColor !== 'transparent') {
+        allowedStyles.push(`background-color: ${style.backgroundColor}`)
+      }
+
+      // Keep text-align
+      if (style.textAlign) {
+        allowedStyles.push(`text-align: ${style.textAlign}`)
+      }
+
+      // Keep font-size (for headings and emphasis)
+      if (style.fontSize) {
+        allowedStyles.push(`font-size: ${style.fontSize}`)
+      }
+
+      // Keep margin and padding (for spacing)
+      if (style.margin) {
+        allowedStyles.push(`margin: ${style.margin}`)
+      }
+      if (style.padding) {
+        allowedStyles.push(`padding: ${style.padding}`)
+      }
+
+      // Apply only allowed styles
+      if (allowedStyles.length > 0) {
+        el.setAttribute('style', allowedStyles.join('; '))
+      } else {
+        el.removeAttribute('style')
+      }
+    }
+  })
+
+  return tempDiv.innerHTML
+}
+
+// Handle paste events - preserve formatting
 function handlePaste(e: ClipboardEvent) {
   e.preventDefault()
-  const text = e.clipboardData?.getData('text/plain') || ''
   
-  // If HTML is pasted, extract plain text
   const selection = window.getSelection()
-  if (selection && selection.rangeCount > 0) {
-    const range = selection.getRangeAt(0)
-    range.deleteContents()
-    range.insertNode(document.createTextNode(text))
+  if (!selection || selection.rangeCount === 0) return
+
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+
+  // Try to get HTML first (preserves formatting)
+  let html = e.clipboardData?.getData('text/html') || ''
+  const plainText = e.clipboardData?.getData('text/plain') || ''
+
+  if (html && html.trim()) {
+    // Sanitize the HTML to remove dangerous content
+    html = sanitizeHtml(html)
+    
+    // Create a temporary container to parse the HTML
+    const tempDiv = document.createElement('div')
+    tempDiv.innerHTML = html
+
+    // Convert to document fragment for safe insertion
+    const fragment = document.createDocumentFragment()
+    while (tempDiv.firstChild) {
+      fragment.appendChild(tempDiv.firstChild)
+    }
+
+    // Insert the fragment
+    range.insertNode(fragment)
+
+    // Move cursor to end of inserted content
+    range.setStartAfter(fragment.lastChild || fragment)
     range.collapse(false)
     selection.removeAllRanges()
     selection.addRange(range)
+  } else if (plainText) {
+    // Fallback to plain text if no HTML available
+    // Preserve line breaks by converting \n to paragraphs
+    const lines = plainText.split('\n')
+    if (lines.length > 1) {
+      // Multiple lines - create paragraphs
+      const textFragment = document.createDocumentFragment()
+      lines.forEach((line) => {
+        const p = document.createElement('p')
+        p.textContent = line.trim() || '\u00A0' // Non-breaking space for empty lines
+        textFragment.appendChild(p)
+      })
+      range.insertNode(textFragment)
+      // Move cursor to end of last paragraph
+      const lastP = textFragment.querySelector('p:last-child')
+      if (lastP) {
+        const newRange = document.createRange()
+        newRange.setStartAfter(lastP)
+        newRange.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(newRange)
+      } else {
+        range.collapse(false)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      }
+    } else {
+      // Single line - just insert text
+      range.insertNode(document.createTextNode(plainText))
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
   }
   
   updateContentFromEditor()

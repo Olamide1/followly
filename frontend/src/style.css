@@ -376,3 +376,40 @@
   font-style: italic;
 }
 
+/* Settings Guide Styling */
+.prose a {
+  @apply text-ink-900 underline hover:text-ink-700 transition-colors;
+}
+
+.prose code {
+  @apply bg-ink-100 text-ink-900 px-1 py-0.5 rounded text-xs font-mono;
+}
+
+.prose ol {
+  @apply list-decimal list-inside space-y-3;
+  padding-left: 1rem;
+}
+
+.prose ul {
+  @apply list-disc list-inside;
+  padding-left: 1rem;
+}
+
+.prose ol ol,
+.prose ul ul {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.prose li {
+  @apply text-ink-700 leading-relaxed;
+}
+
+.prose dt {
+  @apply font-medium text-ink-900 mb-1;
+}
+
+.prose dd {
+  @apply text-ink-600 mb-3;
+}
+
