@@ -1,10 +1,10 @@
 import Queue from 'bull';
 import { processEmailQueue } from '../workers/emailWorker';
-import { processAutomationQueue } from '../workers/automationWorker';
+// import { processAutomationQueue } from '../workers/automationWorker'; // DISABLED: Temporarily commented out
 import { processSchedulingQueue } from '../workers/schedulingWorker';
 
 let emailQueue: Queue.Queue | null = null;
-let automationQueue: Queue.Queue | null = null;
+// let automationQueue: Queue.Queue | null = null; // DISABLED: Temporarily commented out
 let schedulingQueue: Queue.Queue | null = null;
 
 export async function initializeQueues(): Promise<void> {
@@ -12,12 +12,12 @@ export async function initializeQueues(): Promise<void> {
     const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
 
     emailQueue = new Queue('email', redisUrl);
-    automationQueue = new Queue('automation', redisUrl);
+    // automationQueue = new Queue('automation', redisUrl); // DISABLED: Temporarily commented out
     schedulingQueue = new Queue('scheduling', redisUrl);
 
     // Process queues
     emailQueue.process(processEmailQueue);
-    automationQueue.process(processAutomationQueue);
+    // automationQueue.process(processAutomationQueue); // DISABLED: Temporarily commented out
     schedulingQueue.process(processSchedulingQueue);
 
     console.log('✅ Queues initialized');
@@ -34,12 +34,13 @@ export function getEmailQueue() {
   return emailQueue;
 }
 
-export function getAutomationQueue() {
-  if (!automationQueue) {
-    throw new Error('Automation queue not initialized');
-  }
-  return automationQueue;
-}
+// DISABLED: Temporarily commented out
+// export function getAutomationQueue() {
+//   if (!automationQueue) {
+//     throw new Error('Automation queue not initialized');
+//   }
+//   return automationQueue;
+// }
 
 export function getSchedulingQueue() {
   if (!schedulingQueue) {

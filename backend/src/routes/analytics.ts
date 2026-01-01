@@ -24,12 +24,13 @@ router.get('/dashboard', async (req: AuthRequest, res: Response, next: NextFunct
     );
     const totalCampaigns = parseInt(campaignsResult.rows[0].count);
 
-    // Total automations
-    const automationsResult = await pool.query(
-      'SELECT COUNT(*) FROM automations WHERE user_id = $1',
-      [userId]
-    );
-    const totalAutomations = parseInt(automationsResult.rows[0].count);
+    // Total automations - DISABLED: Temporarily commented out
+    // const automationsResult = await pool.query(
+    //   'SELECT COUNT(*) FROM automations WHERE user_id = $1',
+    //   [userId]
+    // );
+    // const totalAutomations = parseInt(automationsResult.rows[0].count);
+    const totalAutomations = 0; // DISABLED: Set to 0 while automations are disabled
 
     // Email stats (last 30 days) - using email_queue for sent count, email_events for engagement
     const emailQueueResult = await pool.query(

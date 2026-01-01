@@ -9,7 +9,7 @@
       <p class="text-ink-500 text-sm tracking-wider">LOADING...</p>
     </div>
 
-    <div v-else-if="stats && (stats.contacts?.total > 0 || stats.campaigns?.total > 0 || stats.automations?.total > 0 || stats.emails?.sent > 0)">
+    <div v-else-if="stats && (stats.contacts?.total > 0 || stats.campaigns?.total > 0 || stats.emails?.sent > 0)">
       <!-- Stats grid - Agnes Martin style, mobile responsive -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8 mb-12 sm:mb-16">
         <div class="stat-card">
@@ -22,10 +22,11 @@
           <div class="stat-value">{{ stats?.campaigns?.total || 0 }}</div>
         </div>
         
-        <div class="stat-card">
+        <!-- DISABLED: Temporarily commented out -->
+        <!-- <div class="stat-card">
           <div class="stat-label">Automations</div>
           <div class="stat-value">{{ stats?.automations?.total || 0 }}</div>
-        </div>
+        </div> -->
         
         <div class="stat-card">
           <div class="stat-label">Emails Sent (30d)</div>
@@ -65,9 +66,10 @@
             <router-link to="/app/campaigns/new" class="block btn w-full text-center">
               Create Campaign
             </router-link>
-            <router-link to="/app/automations/new" class="block btn w-full text-center">
+            <!-- DISABLED: Temporarily commented out -->
+            <!-- <router-link to="/app/automations/new" class="block btn w-full text-center">
               Create Automation
-            </router-link>
+            </router-link> -->
           </div>
         </div>
       </div>

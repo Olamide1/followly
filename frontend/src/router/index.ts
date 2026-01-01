@@ -80,21 +80,22 @@ const router = createRouter({
           name: 'campaign-edit',
           component: () => import('@/views/CampaignForm.vue'),
         },
-        {
-          path: 'automations',
-          name: 'automations',
-          component: () => import('@/views/Automations.vue'),
-        },
-        {
-          path: 'automations/new',
-          name: 'automation-new',
-          component: () => import('@/views/AutomationForm.vue'),
-        },
-        {
-          path: 'automations/:id',
-          name: 'automation-edit',
-          component: () => import('@/views/AutomationForm.vue'),
-        },
+        // DISABLED: Temporarily commented out
+        // {
+        //   path: 'automations',
+        //   name: 'automations',
+        //   component: () => import('@/views/Automations.vue'),
+        // },
+        // {
+        //   path: 'automations/new',
+        //   name: 'automation-new',
+        //   component: () => import('@/views/AutomationForm.vue'),
+        // },
+        // {
+        //   path: 'automations/:id',
+        //   name: 'automation-edit',
+        //   component: () => import('@/views/AutomationForm.vue'),
+        // },
         {
           path: 'analytics',
           name: 'analytics',

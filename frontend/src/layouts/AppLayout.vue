@@ -94,7 +94,7 @@ const navigation = [
   { name: 'Contacts', to: '/app/contacts' },
   { name: 'Lists', to: '/app/lists' },
   { name: 'Campaigns', to: '/app/campaigns' },
-  { name: 'Automations', to: '/app/automations' },
+  // { name: 'Automations', to: '/app/automations' }, // DISABLED: Temporarily commented out
   { name: 'Analytics', to: '/app/analytics' },
   { name: 'Settings', to: '/app/settings' },
 ]

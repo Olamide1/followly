@@ -14,7 +14,7 @@ import authRoutes from './routes/auth';
 import contactRoutes from './routes/contacts';
 import listRoutes from './routes/lists';
 import campaignRoutes from './routes/campaigns';
-import automationRoutes from './routes/automations';
+// import automationRoutes from './routes/automations'; // DISABLED: Temporarily commented out
 import analyticsRoutes from './routes/analytics';
 import providerRoutes from './routes/providers';
 import complianceRoutes from './routes/compliance';
@@ -45,7 +45,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/lists', listRoutes);
 app.use('/api/campaigns', campaignRoutes);
-app.use('/api/automations', automationRoutes);
+// app.use('/api/automations', automationRoutes); // DISABLED: Temporarily commented out
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/compliance', complianceRoutes);
