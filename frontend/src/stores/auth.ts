@@ -18,19 +18,21 @@ export const useAuthStore = defineStore('auth', () => {
     return localStorage.getItem('token')
   }
   
+  // Token ref that syncs with localStorage
+  const token = ref<string | null>(getToken())
+  
   // Helper function to set token in localStorage
   function setToken(value: string | null) {
     if (value) {
       localStorage.setItem('token', value)
+      token.value = value // Always sync the ref when setting
     } else {
       localStorage.removeItem('token')
+      token.value = null // Always sync the ref when removing
     }
   }
   
-  // Token ref that syncs with localStorage
-  const token = ref<string | null>(getToken())
-  
-  // Watch localStorage changes (in case token is updated elsewhere)
+  // Watch localStorage changes (in case token is updated elsewhere, e.g., another tab)
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', (e) => {
       if (e.key === 'token') {
@@ -99,12 +101,16 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function initializeAuth() {
-    // Always check localStorage for latest token
+  function syncToken() {
+    // Force sync token from localStorage to ref
     const currentToken = getToken()
-    if (currentToken) {
-      token.value = currentToken
-    }
+    token.value = currentToken
+    return currentToken
+  }
+
+  async function initializeAuth() {
+    // Always check localStorage for latest token and sync
+    const currentToken = syncToken()
     
     if (currentToken && !user.value && !isLoading.value) {
       try {
@@ -132,6 +138,7 @@ export const useAuthStore = defineStore('auth', () => {
     fetchUser,
     initializeAuth,
     logout,
+    syncToken,
   }
 })
 

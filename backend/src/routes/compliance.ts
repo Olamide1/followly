@@ -1,7 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { pool } from '../database/connection';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
-import { createError } from '../middleware/errorHandler';
 
 const router = Router();
 
@@ -11,17 +10,33 @@ router.post('/unsubscribe', async (req: Request, res: Response, next: NextFuncti
     const { email } = req.body;
 
     if (!email) {
-      throw createError('Email required', 400);
+      return res.status(400).json({ error: 'Email required', success: false });
     }
 
     // Find contact by email
     const contactResult = await pool.query(
-      'SELECT id, user_id FROM contacts WHERE email = $1',
+      'SELECT id, user_id, subscription_status FROM contacts WHERE email = $1',
       [email.toLowerCase()]
     );
 
     if (contactResult.rows.length > 0) {
       const contact = contactResult.rows[0];
+
+      // Check if already unsubscribed
+      if (contact.subscription_status === 'unsubscribed') {
+        // Still add to suppression list to be safe
+        await pool.query(
+          `INSERT INTO suppression_list (user_id, email, reason)
+           VALUES ($1, $2, 'unsubscribed')
+           ON CONFLICT (user_id, email) DO UPDATE SET reason = 'unsubscribed'`,
+          [contact.user_id, email.toLowerCase()]
+        );
+        return res.json({ 
+          success: true, 
+          message: 'Already unsubscribed',
+          alreadyUnsubscribed: true 
+        });
+      }
 
       // Update subscription status
       await pool.query(
@@ -36,14 +51,20 @@ router.post('/unsubscribe', async (req: Request, res: Response, next: NextFuncti
          ON CONFLICT (user_id, email) DO UPDATE SET reason = 'unsubscribed'`,
         [contact.user_id, email.toLowerCase()]
       );
-    } else {
-      // Add to global suppression if contact not found
-      // This would need a global suppression table or handle differently
-    }
 
-    res.json({ success: true, message: 'Unsubscribed successfully' });
+      return res.json({ success: true, message: 'Unsubscribed successfully' });
+    } else {
+      // Contact not found - still return success for privacy (don't reveal if email exists)
+      // But we can't add to suppression list without user_id
+      // For now, just return success
+      return res.json({ 
+        success: true, 
+        message: 'Unsubscribed successfully',
+        note: 'Email not found in our system, but request processed'
+      });
+    }
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 

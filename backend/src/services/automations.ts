@@ -369,7 +369,19 @@ export class AutomationService {
     };
 
     const subject = personalizationService.renderTemplate(config.subject, personalizationData);
-    const content = personalizationService.renderTemplate(config.content, personalizationData);
+    let content = personalizationService.renderTemplate(config.content, personalizationData);
+
+    // Append unsubscribe footer automatically
+    const { appendUnsubscribeFooter } = await import('./unsubscribe');
+    content = await appendUnsubscribeFooter(
+      userId,
+      contact.email,
+      content,
+      {
+        includePreferences: true,
+        includeViewInBrowser: false,
+      }
+    );
 
     // Add to email queue
     const emailQueue = (await import('./queues')).getEmailQueue();

@@ -126,13 +126,56 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
 router.get('/me', authenticateToken, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, name, company, role, created_at FROM users WHERE id = $1',
+      'SELECT id, email, name, company, role, company_address, custom_footer_text, created_at FROM users WHERE id = $1',
       [req.userId]
     );
 
     if (result.rows.length === 0) {
       throw createError('User not found', 404);
     }
+
+    res.json({ user: result.rows[0] });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Update user footer settings
+router.put('/footer-settings', authenticateToken, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { company_address, custom_footer_text } = req.body;
+
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramCount = 1;
+
+    if (company_address !== undefined) {
+      updates.push(`company_address = $${paramCount++}`);
+      params.push(company_address || null);
+    }
+    if (custom_footer_text !== undefined) {
+      updates.push(`custom_footer_text = $${paramCount++}`);
+      params.push(custom_footer_text || null);
+    }
+
+    if (updates.length === 0) {
+      res.status(400).json({ error: 'No fields to update' });
+      return;
+    }
+
+    updates.push(`updated_at = CURRENT_TIMESTAMP`);
+    params.push(req.userId);
+
+    await pool.query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount++}`,
+      params
+    );
+
+    // Return updated user
+    const result = await pool.query(
+      'SELECT id, email, name, company, role, company_address, custom_footer_text, created_at FROM users WHERE id = $1',
+      [req.userId]
+    );
 
     res.json({ user: result.rows[0] });
   } catch (error: any) {

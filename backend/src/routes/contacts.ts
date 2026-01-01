@@ -23,14 +23,46 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
 router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
+    const searchParam = req.query.search as string;
     const result = await service.listContacts(req.userId!, {
       page: parseInt(req.query.page as string) || 1,
       limit: parseInt(req.query.limit as string) || 50,
-      search: req.query.search as string,
+      search: searchParam && searchParam.trim() ? searchParam.trim() : undefined,
       tags: req.query.tags ? (req.query.tags as string).split(',').map(Number) : undefined,
       subscription_status: req.query.subscription_status as string,
     });
     res.json(result);
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Get lists for multiple contacts (batch) - MUST come before /:id/lists
+router.post('/lists/batch', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { contactIds } = req.body;
+    
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      res.json({ listsByContact: {} });
+      return;
+    }
+
+    // Validate and parse all contact IDs
+    const parsedContactIds = contactIds
+      .map((id: any) => {
+        const parsed = parseInt(String(id), 10);
+        return isNaN(parsed) ? null : parsed;
+      })
+      .filter((id: number | null): id is number => id !== null);
+
+    if (parsedContactIds.length === 0) {
+      res.json({ listsByContact: {} });
+      return;
+    }
+
+    const service = new ContactService();
+    const listsByContact = await service.getContactListsBatch(req.userId!, parsedContactIds);
+    res.json({ listsByContact });
   } catch (error: any) {
     next(error);
   }

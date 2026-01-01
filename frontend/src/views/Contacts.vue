@@ -16,13 +16,27 @@
     </div>
 
     <div class="mb-8">
-      <input
-        v-model="searchQuery"
-        type="text"
-        placeholder="Search contacts..."
-        class="input"
-        @input="loadContacts"
-      />
+      <div class="relative">
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="Search contacts by email, name, or company..."
+          class="input pr-10"
+          @input="handleSearchInput"
+          @keyup.enter="handleSearch"
+        />
+        <button
+          v-if="searchQuery.trim()"
+          @click="clearSearch"
+          class="absolute right-3 top-1/2 transform -translate-y-1/2 text-ink-400 hover:text-ink-600"
+          type="button"
+          title="Clear search"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Top Pagination -->
@@ -193,8 +207,16 @@
     <div v-else class="text-center py-24">
       <div class="max-w-md mx-auto">
         <div class="border-l-2 border-ink-900 pl-6 mb-8 text-left">
-          <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-4">No Contacts Yet</h3>
-          <p class="text-ink-700 leading-relaxed mb-6">
+          <h3 v-if="searchQuery.trim()" class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-4">
+            No Contacts Found
+          </h3>
+          <h3 v-else class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-4">
+            No Contacts Yet
+          </h3>
+          <p v-if="searchQuery.trim()" class="text-ink-700 leading-relaxed mb-6">
+            No contacts match your search for "{{ searchQuery }}". Try a different search term or clear your search.
+          </p>
+          <p v-else class="text-ink-700 leading-relaxed mb-6">
             Start building your email list by adding contacts manually or importing a CSV file.
           </p>
           <div class="space-y-3">
@@ -528,15 +550,25 @@ const bulkAddingToListId = ref<number | null>(null)
 const selectedContacts = ref<Set<number>>(new Set())
 const isDeleting = ref(false)
 const contactLists = ref<Record<number, any[]>>({})
+let searchTimeout: ReturnType<typeof setTimeout> | null = null
 
 async function loadContacts() {
   loading.value = true
   try {
+    // Ensure token is sent - double check before request
+    const token = localStorage.getItem('token')
+    if (!token) {
+      console.warn('No token found when loading contacts')
+      contacts.value = []
+      pagination.value = { page: 1, limit: pagination.value.limit, total: 0, totalPages: 0 }
+      return
+    }
+    
     const response = await api.get('/contacts', {
       params: {
         page: pagination.value.page,
         limit: pagination.value.limit,
-        search: searchQuery.value || undefined,
+        search: searchQuery.value.trim() || undefined,
       },
     })
     contacts.value = response.data.contacts
@@ -545,25 +577,88 @@ async function loadContacts() {
     selectedContacts.value.clear()
     // Load lists for each contact
     await loadContactLists()
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to load contacts:', error)
+    
+    // CRITICAL: Handle ALL errors gracefully - NEVER let search errors break session
+    // The API interceptor is configured to NEVER logout on GET /contacts requests
+    // All errors here should be handled gracefully without breaking session
+    
+    // For ANY error (including 401s), just show empty results
+    // The interceptor will handle actual auth failures, but search operations
+    // are protected from causing logout
+    contacts.value = []
+    pagination.value = { page: 1, limit: pagination.value.limit, total: 0, totalPages: 0 }
+    
+    // Log the error for debugging but don't break the session
+    if (error.response?.status === 401) {
+      console.warn('401 error in loadContacts - showing empty results, not breaking session:', 
+        error.response?.data?.error || error.message)
+    }
   } finally {
     loading.value = false
   }
 }
 
+function handleSearchInput() {
+  // Reset to page 1 when searching
+  if (pagination.value.page !== 1) {
+    pagination.value.page = 1
+  }
+  
+  // Debounce search - wait 300ms after user stops typing
+  if (searchTimeout) {
+    clearTimeout(searchTimeout)
+  }
+  
+  searchTimeout = setTimeout(() => {
+    handleSearch()
+  }, 300)
+}
+
+function handleSearch() {
+  // Reset to page 1 when searching
+  pagination.value.page = 1
+  loadContacts()
+}
+
+function clearSearch() {
+  searchQuery.value = ''
+  pagination.value.page = 1
+  loadContacts()
+}
+
 async function loadContactLists() {
-  // Load lists for all contacts in parallel
-  const promises = contacts.value.map(async (contact) => {
-    try {
-      const response = await api.get(`/contacts/${contact.id}/lists`)
-      contactLists.value[contact.id] = response.data.lists || []
-    } catch (error) {
-      console.error(`Failed to load lists for contact ${contact.id}:`, error)
-      contactLists.value[contact.id] = []
+  // Use batch endpoint to load lists for all contacts in a single request
+  // This prevents rate limiting issues from making 50+ individual requests
+  if (contacts.value.length === 0) {
+    return
+  }
+
+  try {
+    const contactIds = contacts.value.map(c => c.id)
+    const response = await api.post('/contacts/lists/batch', { contactIds })
+    
+    // Update contactLists with batch results
+    if (response.data.listsByContact) {
+      Object.assign(contactLists.value, response.data.listsByContact)
     }
-  })
-  await Promise.all(promises)
+    
+    // Ensure all contacts have an entry (even if empty)
+    for (const contact of contacts.value) {
+      if (!contactLists.value[contact.id]) {
+        contactLists.value[contact.id] = []
+      }
+    }
+  } catch (error: any) {
+    console.error('Failed to load contact lists batch:', error)
+    // On error, set empty lists for all contacts
+    for (const contact of contacts.value) {
+      if (!contactLists.value[contact.id]) {
+        contactLists.value[contact.id] = []
+      }
+    }
+  }
 }
 
 function changePage(page: number) {

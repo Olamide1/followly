@@ -326,9 +326,21 @@ export class CampaignService {
         campaign.subject,
         personalizationData
       );
-      const personalizedContent = this.personalizationService.renderTemplate(
+      let personalizedContent = this.personalizationService.renderTemplate(
         campaign.content,
         personalizationData
+      );
+
+      // Append unsubscribe footer automatically
+      const { appendUnsubscribeFooter } = await import('./unsubscribe');
+      personalizedContent = await appendUnsubscribeFooter(
+        userId,
+        contact.email,
+        personalizedContent,
+        {
+          includePreferences: true,
+          includeViewInBrowser: false,
+        }
       );
 
       // Determine send time (spread out)

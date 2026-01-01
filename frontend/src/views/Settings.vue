@@ -257,6 +257,49 @@
           <button type="submit" class="btn btn-primary w-full sm:w-auto">Add Provider</button>
         </form>
       </div>
+
+      <div class="bg-paper border border-grid-light p-8">
+        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Footer Settings</h2>
+        <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+          Customize the unsubscribe footer that is automatically added to all campaign and automation emails. This footer is required for compliance with email regulations (CAN-SPAM, GDPR, CASL).
+        </p>
+        
+        <form @submit.prevent="saveFooterSettings" class="space-y-6 sm:space-y-8">
+          <div>
+            <label for="custom_footer_text" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+              Custom Footer Text
+            </label>
+            <input
+              id="custom_footer_text"
+              v-model="footerForm.custom_footer_text"
+              type="text"
+              placeholder="Don't want to receive these emails?"
+              class="input"
+            />
+            <p class="text-xs text-ink-500 mt-2">
+              This text appears before the unsubscribe link. Leave empty to use the default text.
+            </p>
+          </div>
+
+          <div>
+            <label for="company_address" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+              Company Address
+            </label>
+            <textarea
+              id="company_address"
+              v-model="footerForm.company_address"
+              rows="3"
+              placeholder="123 Your Street, City, State ZIP"
+              class="input"
+            ></textarea>
+            <p class="text-xs text-ink-500 mt-2">
+              Your physical mailing address (required by CAN-SPAM Act). This will appear at the bottom of all emails.
+            </p>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-full sm:w-auto">Save Footer Settings</button>
+        </form>
+      </div>
     </div>
   </div>
 </template>
@@ -264,7 +307,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import api from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const providers = ref<any[]>([])
 const showGuide = ref(false)
 const providerForm = ref({
@@ -274,6 +319,10 @@ const providerForm = ref({
   from_email: '',
   daily_limit: 0,
   is_default: false,
+})
+const footerForm = ref({
+  custom_footer_text: '',
+  company_address: '',
 })
 
 async function loadProviders() {
@@ -328,8 +377,41 @@ async function reactivateProvider(id: number) {
   }
 }
 
+async function loadFooterSettings() {
+  try {
+    // Load from user data (already fetched by auth store)
+    if (authStore.user) {
+      footerForm.value.custom_footer_text = (authStore.user as any).custom_footer_text || ''
+      footerForm.value.company_address = (authStore.user as any).company_address || ''
+    } else {
+      // Fetch user data if not loaded
+      await authStore.fetchUser()
+      if (authStore.user) {
+        footerForm.value.custom_footer_text = (authStore.user as any).custom_footer_text || ''
+        footerForm.value.company_address = (authStore.user as any).company_address || ''
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load footer settings:', error)
+  }
+}
+
+async function saveFooterSettings() {
+  try {
+    await api.put('/auth/footer-settings', footerForm.value)
+    alert('Footer settings saved successfully!')
+    // Reload user data to get updated settings
+    await authStore.fetchUser()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to save footer settings'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to save footer settings:', error)
+  }
+}
+
 onMounted(() => {
   loadProviders()
+  loadFooterSettings()
 })
 </script>
 

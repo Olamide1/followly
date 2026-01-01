@@ -155,9 +155,31 @@ export class ContactService {
 
     const result = await pool.query(query, params);
 
-    // Get total count
-    const countQuery = query.replace(/SELECT \*/, 'SELECT COUNT(*)').replace(/ORDER BY.*$/, '');
-    const countResult = await pool.query(countQuery, params.slice(0, -2));
+    // Get total count - build count query separately for reliability
+    let countQuery = 'SELECT COUNT(*) as count FROM contacts WHERE user_id = $1';
+    const countParams: any[] = [userId];
+    let countParamCount = 1;
+
+    if (options.search) {
+      countParamCount++;
+      countQuery += ` AND (email ILIKE $${countParamCount} OR name ILIKE $${countParamCount} OR company ILIKE $${countParamCount})`;
+      countParams.push(`%${options.search}%`);
+    }
+
+    if (options.subscription_status) {
+      countParamCount++;
+      countQuery += ` AND subscription_status = $${countParamCount}`;
+      countParams.push(options.subscription_status);
+    }
+
+    if (options.tags && options.tags.length > 0) {
+      countQuery += ` AND id IN (
+        SELECT contact_id FROM contact_tags WHERE tag_id = ANY($${countParamCount + 1})
+      )`;
+      countParams.push(options.tags);
+    }
+
+    const countResult = await pool.query(countQuery, countParams);
     const total = parseInt(countResult.rows[0].count);
 
     return {
@@ -293,6 +315,46 @@ export class ContactService {
     );
 
     return result.rows;
+  }
+
+  async getContactListsBatch(userId: number, contactIds: number[]): Promise<Record<number, any[]>> {
+    if (contactIds.length === 0) {
+      return {};
+    }
+
+    // Get all lists for all contacts in a single query
+    const result = await pool.query(
+      `SELECT lc.contact_id, l.id, l.name, l.type, l.description
+       FROM lists l
+       INNER JOIN list_contacts lc ON l.id = lc.list_id
+       WHERE lc.contact_id = ANY($1) AND l.user_id = $2
+       ORDER BY lc.contact_id, l.name ASC`,
+      [contactIds, userId]
+    );
+
+    // Group by contact_id
+    const listsByContact: Record<number, any[]> = {};
+    for (const row of result.rows) {
+      const contactId = row.contact_id;
+      if (!listsByContact[contactId]) {
+        listsByContact[contactId] = [];
+      }
+      listsByContact[contactId].push({
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        description: row.description,
+      });
+    }
+
+    // Ensure all contact IDs have an array (even if empty)
+    for (const contactId of contactIds) {
+      if (!listsByContact[contactId]) {
+        listsByContact[contactId] = [];
+      }
+    }
+
+    return listsByContact;
   }
 
   async importContacts(userId: number, contacts: ContactData[]): Promise<{

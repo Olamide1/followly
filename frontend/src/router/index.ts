@@ -20,6 +20,12 @@ const router = createRouter({
       component: () => import('@/views/Register.vue'),
     },
     {
+      path: '/unsubscribe',
+      name: 'unsubscribe',
+      component: () => import('@/views/Unsubscribe.vue'),
+      meta: { requiresAuth: false },
+    },
+    {
       path: '/app',
       component: () => import('@/layouts/AppLayout.vue'),
       meta: { requiresAuth: true },
@@ -107,9 +113,12 @@ const router = createRouter({
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
   
+  // Always sync token from localStorage first to ensure we have the latest value
+  const tokenFromStorage = authStore.syncToken()
+  
   // If we have a token but no user data, initialize auth first
   // This ensures user data is loaded before checking auth state
-  if (authStore.token && !authStore.user && !authStore.isLoading) {
+  if (tokenFromStorage && !authStore.user && !authStore.isLoading) {
     try {
       await authStore.initializeAuth()
     } catch (error) {
@@ -129,9 +138,11 @@ router.beforeEach(async (to, _from, next) => {
   }
   
   // Check authentication after initialization
-  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+  // Use token from storage for the check to ensure accuracy
+  const hasToken = !!localStorage.getItem('token')
+  if (to.meta.requiresAuth && !hasToken) {
     next({ name: 'login' })
-  } else if ((to.name === 'login' || to.name === 'register') && authStore.isAuthenticated) {
+  } else if ((to.name === 'login' || to.name === 'register') && hasToken) {
     next({ name: 'dashboard' })
   } else {
     next()

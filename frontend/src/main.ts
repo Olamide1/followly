@@ -12,8 +12,12 @@ app.use(pinia)
 app.use(router)
 
 // Initialize auth on app startup
+// Check localStorage directly to ensure we get the token even if store isn't initialized yet
 const authStore = useAuthStore()
-if (authStore.token) {
+const token = localStorage.getItem('token')
+if (token) {
+  // Sync token to store first
+  authStore.token = token
   authStore.initializeAuth().catch(() => {
     // Silent fail - token might be invalid
   })

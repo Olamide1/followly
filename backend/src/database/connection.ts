@@ -65,6 +65,7 @@ async function runMigrations(): Promise<void> {
       createCustomFieldsTable,
       createTagsTable,
       createContactTagsTable,
+      addUserFooterSettings,
     ];
     
     for (const migration of migrations) {
@@ -474,6 +475,34 @@ async function createContactTagsTable(client: PoolClient): Promise<void> {
   
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_contact_tags_tag_id ON contact_tags(tag_id)
+  `);
+}
+
+async function addUserFooterSettings(client: PoolClient): Promise<void> {
+  // Add company_address column if it doesn't exist
+  await client.query(`
+    DO $$ 
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'company_address'
+      ) THEN
+        ALTER TABLE users ADD COLUMN company_address TEXT;
+      END IF;
+    END $$;
+  `);
+
+  // Add custom_footer_text column if it doesn't exist
+  await client.query(`
+    DO $$ 
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'custom_footer_text'
+      ) THEN
+        ALTER TABLE users ADD COLUMN custom_footer_text TEXT;
+      END IF;
+    END $$;
   `);
 }
 
