@@ -10,7 +10,7 @@ router.use(authenticateToken);
 router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      'SELECT id, provider, from_email, from_name, daily_limit, is_active, is_default, created_at FROM provider_configs WHERE user_id = $1',
+      'SELECT id, provider, from_email, from_name, daily_limit, is_active, is_default, created_at, updated_at FROM provider_configs WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC',
       [req.userId]
     );
 
@@ -81,6 +81,8 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
           );
         }
       }
+      // Always set is_active to true when updating (reactivate if it was inactive)
+      updates.push(`is_active = true`);
 
       if (updates.length > 0) {
         updates.push(`updated_at = CURRENT_TIMESTAMP`);
@@ -100,10 +102,10 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
       // Create
       const result = await pool.query(
         `INSERT INTO provider_configs 
-         (user_id, provider, api_key, api_secret, from_email, from_name, daily_limit, is_default)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (user_id, provider, api_key, api_secret, from_email, from_name, daily_limit, is_default, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
-        [req.userId, provider, api_key, api_secret, from_email, from_name, daily_limit || 0, is_default || false]
+        [req.userId, provider, api_key, api_secret, from_email, from_name, daily_limit || 0, is_default || false, true]
       );
       config = result.rows[0];
     }
@@ -113,6 +115,24 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
     delete config.api_secret;
 
     res.json({ config });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Reactivate provider (set is_active to true) - must come before /:id route
+router.post('/:id/reactivate', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const result = await pool.query(
+      'UPDATE provider_configs SET is_active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 RETURNING id, provider, is_active',
+      [parseInt(req.params.id), req.userId]
+    );
+
+    if (result.rows.length === 0) {
+      throw createError('Provider not found', 404);
+    }
+
+    res.json({ success: true, config: result.rows[0] });
   } catch (error: any) {
     next(error);
   }

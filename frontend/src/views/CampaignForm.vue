@@ -191,15 +191,141 @@
           <input id="from_name" v-model="form.from_name" type="text" class="input" />
         </div>
 
+        <div class="bg-ink-50 border border-grid-light p-6">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-sm font-normal text-ink-900 uppercase tracking-wider mb-1">Send Options</h3>
+              <p class="text-xs text-ink-600">Choose when to send this campaign</p>
+            </div>
+            <label class="flex items-center">
+              <input
+                v-model="scheduleEnabled"
+                type="checkbox"
+                class="mr-2"
+              />
+              <span class="text-xs text-ink-700 uppercase tracking-wider">Schedule Send</span>
+            </label>
+          </div>
+
+          <div v-if="scheduleEnabled" class="space-y-4">
+            <div>
+              <label for="scheduled_date" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                Date *
+              </label>
+              <input
+                id="scheduled_date"
+                v-model="scheduledDate"
+                type="date"
+                required
+                :min="minDate"
+                class="input"
+              />
+            </div>
+            <div>
+              <label for="scheduled_time" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                Time *
+              </label>
+              <input
+                id="scheduled_time"
+                v-model="scheduledTime"
+                type="time"
+                required
+                class="input"
+              />
+            </div>
+            <div v-if="scheduledDateTime" class="p-3 bg-paper border border-grid-medium">
+              <p class="text-xs text-ink-600 mb-1">Scheduled for:</p>
+              <p class="text-sm font-medium text-ink-900">{{ formatScheduledDateTime(scheduledDateTime) }}</p>
+              <p class="text-xs text-ink-500 mt-1">Timezone: {{ userTimezone }}</p>
+            </div>
+          </div>
+          <div v-else class="text-xs text-ink-600">
+            Campaign will be saved as draft. You can send it manually later.
+          </div>
+        </div>
+
         <div v-if="error" class="text-ink-700 text-sm border-l-2 border-ink-900 pl-4">
           {{ error }}
         </div>
 
-        <div class="flex flex-col sm:flex-row justify-end space-y-3 sm:space-y-0 sm:space-x-3 pt-4">
-          <router-link to="/app/campaigns" class="btn w-full sm:w-auto text-center">Cancel</router-link>
-          <button type="submit" :disabled="loading" class="btn btn-primary w-full sm:w-auto">
-            {{ loading ? 'SAVING...' : 'SAVE' }}
+        <div class="flex flex-col sm:flex-row justify-between items-center space-y-3 sm:space-y-0 pt-4">
+          <button
+            v-if="form.content && form.subject"
+            @click="showTestSendModal = true"
+            type="button"
+            class="btn btn-ghost text-xs text-ink-700"
+          >
+            Send Test Email
           </button>
+          <div class="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 w-full sm:w-auto">
+            <router-link to="/app/campaigns" class="btn w-full sm:w-auto text-center">Cancel</router-link>
+            <button
+              v-if="scheduleEnabled"
+              type="submit"
+              :disabled="loading || !scheduledDateTime"
+              class="btn btn-primary w-full sm:w-auto"
+            >
+              {{ loading ? 'SCHEDULING...' : 'SCHEDULE SEND' }}
+            </button>
+            <button
+              v-else
+              type="submit"
+              :disabled="loading"
+              class="btn btn-primary w-full sm:w-auto"
+            >
+              {{ loading ? 'SAVING...' : 'SAVE DRAFT' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Test Send Modal -->
+        <div
+          v-if="showTestSendModal"
+          class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          @click.self="showTestSendModal = false"
+        >
+          <div class="bg-paper border border-grid-light p-8 max-w-md w-full mx-4">
+            <h2 class="text-lg font-light text-ink-900 mb-6">Send Test Email</h2>
+            
+            <div class="space-y-4 mb-6">
+              <div>
+                <label for="test_email" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                  Test Email Address *
+                </label>
+                <input
+                  id="test_email"
+                  v-model="testEmail"
+                  type="email"
+                  required
+                  placeholder="your@email.com"
+                  class="input w-full"
+                />
+                <p class="text-xs text-ink-600 mt-2">
+                  Send a test email to yourself to preview how it will look
+                </p>
+              </div>
+            </div>
+
+            <div v-if="testSendError" class="text-sm text-ink-700 border-l-2 border-ink-900 pl-4 mb-4">
+              {{ testSendError }}
+            </div>
+
+            <div class="flex justify-end space-x-3">
+              <button
+                @click="showTestSendModal = false"
+                class="btn btn-ghost text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                @click="sendTestEmail"
+                :disabled="!testEmail || testSending"
+                class="btn btn-primary text-xs"
+              >
+                {{ testSending ? 'SENDING...' : 'SEND TEST' }}
+              </button>
+            </div>
+          </div>
         </div>
       </form>
     </div>
@@ -242,7 +368,52 @@ const form = ref({
   list_id: '',
   from_email: '',
   from_name: '',
+  scheduled_at: null as string | null,
 })
+
+const scheduleEnabled = ref(false)
+const scheduledDate = ref('')
+const scheduledTime = ref('')
+const showTestSendModal = ref(false)
+const testEmail = ref('')
+const testSending = ref(false)
+const testSendError = ref('')
+
+// Get minimum date (today)
+const minDate = computed(() => {
+  const today = new Date()
+  return today.toISOString().split('T')[0]
+})
+
+// Computed scheduled datetime
+const scheduledDateTime = computed(() => {
+  if (!scheduleEnabled.value || !scheduledDate.value || !scheduledTime.value) {
+    return null
+  }
+  // Combine date and time, convert to ISO string
+  const dateTime = new Date(`${scheduledDate.value}T${scheduledTime.value}`)
+  return dateTime.toISOString()
+})
+
+// Get user's timezone
+const userTimezone = computed(() => {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+})
+
+// Format scheduled datetime for display
+function formatScheduledDateTime(isoString: string): string {
+  const date = new Date(isoString)
+  return date.toLocaleString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  })
+}
 
 // Convert editor content to HTML
 function editorContentToHtml(): string {
@@ -754,6 +925,19 @@ onMounted(async () => {
         list_id: response.data.campaign.list_id?.toString() || '',
       }
       Object.assign(form.value, campaignData)
+      
+      // Load scheduled_at if exists
+      if (campaignData.scheduled_at) {
+        scheduleEnabled.value = true
+        const scheduledDateObj = new Date(campaignData.scheduled_at)
+        // Format date as YYYY-MM-DD
+        scheduledDate.value = scheduledDateObj.toISOString().split('T')[0]
+        // Format time as HH:MM
+        const hours = scheduledDateObj.getHours().toString().padStart(2, '0')
+        const minutes = scheduledDateObj.getMinutes().toString().padStart(2, '0')
+        scheduledTime.value = `${hours}:${minutes}`
+      }
+      
       // Load HTML content into editor after DOM is ready
       setTimeout(() => {
         if (editorDiv.value) {
@@ -834,22 +1018,101 @@ async function handleSubmit() {
     return
   }
 
+  // Validate scheduled time if scheduling is enabled
+  if (scheduleEnabled.value) {
+    if (!scheduledDateTime.value) {
+      error.value = 'Please select a valid date and time for scheduling'
+      loading.value = false
+      return
+    }
+    // Check if scheduled time is in the past
+    const now = new Date()
+    const scheduled = new Date(scheduledDateTime.value)
+    if (scheduled <= now) {
+      error.value = 'Scheduled time must be in the future'
+      loading.value = false
+      return
+    }
+  }
+
   try {
-    const payload = {
+    const payload: any = {
       ...form.value,
       list_id: parseInt(form.value.list_id),
+      scheduled_at: scheduleEnabled.value && scheduledDateTime.value ? scheduledDateTime.value : null,
     }
 
     if (isEdit.value) {
       await api.put(`/campaigns/${route.params.id}`, payload)
+      alert(scheduleEnabled.value ? 'Campaign scheduled successfully!' : 'Campaign updated successfully!')
     } else {
       await api.post('/campaigns', payload)
+      alert(scheduleEnabled.value ? 'Campaign scheduled successfully!' : 'Campaign created successfully!')
     }
     router.push('/app/campaigns')
   } catch (err: any) {
     error.value = err.response?.data?.error || 'Failed to save campaign'
   } finally {
     loading.value = false
+  }
+}
+
+async function sendTestEmail() {
+  testSendError.value = ''
+  
+  if (!testEmail.value || !testEmail.value.includes('@')) {
+    testSendError.value = 'Please enter a valid email address'
+    return
+  }
+
+  // Ensure content is saved from editor
+  if (editorDiv.value && !showPreview.value) {
+    const html = editorContentToHtml()
+    if (html !== form.value.content) {
+      form.value.content = html
+    }
+  }
+
+  // Validate content exists
+  if (!form.value.content || !form.value.content.trim()) {
+    testSendError.value = 'Please add email content first'
+    return
+  }
+
+  if (!form.value.subject || !form.value.subject.trim()) {
+    testSendError.value = 'Please add a subject first'
+    return
+  }
+
+  testSending.value = true
+  try {
+    // Use personalization with test data
+    const testContent = form.value.content
+      .replace(/\{\{\s*name\s*\}\}/gi, 'Test User')
+      .replace(/\{\{\s*company\s*\}\}/gi, 'Test Company')
+      .replace(/\{\{\s*email\s*\}\}/gi, testEmail.value)
+    
+    const testSubject = form.value.subject
+      .replace(/\{\{\s*name\s*\}\}/gi, 'Test User')
+      .replace(/\{\{\s*company\s*\}\}/gi, 'Test Company')
+      .replace(/\{\{\s*email\s*\}\}/gi, testEmail.value)
+
+    await api.post('/campaigns/test-send', {
+      to: testEmail.value,
+      subject: testSubject,
+      content: testContent,
+      from_email: form.value.from_email,
+      from_name: form.value.from_name,
+    })
+    
+    alert('Test email sent successfully! Check your inbox.')
+    showTestSendModal.value = false
+    testEmail.value = ''
+  } catch (err: any) {
+    console.error('Failed to send test email:', err)
+    testSendError.value = err.response?.data?.error || err.message || 'Failed to send test email. Please check your email provider settings.'
+  } finally {
+    testSending.value = false
   }
 }
 </script>

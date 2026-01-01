@@ -23,18 +23,43 @@
           <div
             v-for="provider in providers"
             :key="provider.id"
-            class="flex justify-between items-center border-b border-grid-light pb-4"
+            class="border-b border-grid-light pb-4"
           >
-            <div>
-              <span class="text-ink-900 uppercase tracking-wider text-sm">{{ provider.provider }}</span>
-              <span v-if="provider.is_default" class="ml-3 text-xs text-ink-500 uppercase tracking-wider">(Default)</span>
+            <div class="flex justify-between items-start">
+              <div class="flex-1">
+                <div class="flex items-center space-x-3 mb-2">
+                  <span class="text-ink-900 uppercase tracking-wider text-sm font-medium">{{ provider.provider }}</span>
+                  <span v-if="provider.is_default" class="text-xs text-ink-500 uppercase tracking-wider">(Default)</span>
+                  <span 
+                    v-if="!provider.is_active" 
+                    class="text-xs text-ink-600 uppercase tracking-wider bg-ink-100 px-2 py-1"
+                  >
+                    Inactive
+                  </span>
+                </div>
+                <div v-if="provider.from_email" class="text-xs text-ink-600 mb-1">
+                  From: {{ provider.from_email }}
+                </div>
+                <div v-if="!provider.is_active" class="text-xs text-ink-500 italic mt-1">
+                  This provider is inactive and won't be used for sending emails. Click "Reactivate" to enable it.
+                </div>
+              </div>
+              <div class="flex items-center space-x-3 ml-4">
+                <button
+                  v-if="!provider.is_active"
+                  @click="reactivateProvider(provider.id)"
+                  class="text-xs text-ink-600 hover:text-ink-900 uppercase tracking-wider px-3 py-1 border border-grid-medium hover:border-ink-900 transition-colors"
+                >
+                  Reactivate
+                </button>
+                <button
+                  @click="deleteProvider(provider.id)"
+                  class="text-ink-500 hover:text-ink-900 text-xs"
+                >
+                  Remove
+                </button>
+              </div>
             </div>
-            <button
-              @click="deleteProvider(provider.id)"
-              class="text-ink-500 hover:text-ink-900 text-xs"
-            >
-              Remove
-            </button>
           </div>
         </div>
       </div>
@@ -288,6 +313,18 @@ async function deleteProvider(id: number) {
     loadProviders()
   } catch (error) {
     console.error('Failed to delete provider:', error)
+  }
+}
+
+async function reactivateProvider(id: number) {
+  try {
+    await api.post(`/providers/${id}/reactivate`)
+    alert('Provider reactivated successfully!')
+    loadProviders()
+  } catch (error: any) {
+    console.error('Failed to reactivate provider:', error)
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to reactivate provider'
+    alert(`Error: ${errorMessage}`)
   }
 }
 

@@ -3,7 +3,7 @@ import { createError } from '../middleware/errorHandler';
 import { PersonalizationService } from './personalization';
 import { RoutingService } from './routing';
 import { EmailProviderService } from './providers';
-import { getEmailQueue } from './queues';
+import { getEmailQueue, getSchedulingQueue } from './queues';
 import { WarmupService } from './warmup';
 
 export interface CampaignData {
@@ -58,7 +58,28 @@ export class CampaignService {
       ]
     );
 
-    return result.rows[0];
+    const campaign = result.rows[0];
+
+    // If scheduled, add to scheduling queue
+    if (data.scheduled_at) {
+      const scheduledAt = new Date(data.scheduled_at);
+      const now = new Date();
+      const delay = Math.max(0, scheduledAt.getTime() - now.getTime());
+
+      const schedulingQueue = getSchedulingQueue();
+      await schedulingQueue.add(
+        { campaignId: campaign.id },
+        {
+          delay,
+          jobId: `campaign-${campaign.id}`, // Unique job ID to prevent duplicates
+          removeOnComplete: true,
+          removeOnFail: false,
+        }
+      );
+      console.log(`Campaign ${campaign.id} scheduled for ${scheduledAt.toISOString()}`);
+    }
+
+    return campaign;
   }
 
   async getCampaign(userId: number, campaignId: number) {
@@ -173,6 +194,9 @@ export class CampaignService {
       params.push(data.scheduled_at);
       if (data.scheduled_at) {
         updates.push(`status = 'scheduled'`);
+      } else {
+        // If scheduled_at is cleared, set status back to draft
+        updates.push(`status = 'draft'`);
       }
     }
 
@@ -188,7 +212,40 @@ export class CampaignService {
       params
     );
 
-    return this.getCampaign(userId, campaignId);
+    const updatedCampaign = await this.getCampaign(userId, campaignId);
+
+    // Handle scheduling queue updates
+    const schedulingQueue = getSchedulingQueue();
+    const jobId = `campaign-${campaignId}`;
+
+    // Remove existing scheduled job if any
+    const existingJob = await schedulingQueue.getJob(jobId);
+    if (existingJob) {
+      await existingJob.remove();
+    }
+
+    // If new scheduled_at is set, add to queue
+    if (updatedCampaign.scheduled_at && updatedCampaign.status === 'scheduled') {
+      const scheduledAt = new Date(updatedCampaign.scheduled_at);
+      const now = new Date();
+      const delay = Math.max(0, scheduledAt.getTime() - now.getTime());
+
+      // Only schedule if in the future
+      if (delay > 0) {
+        await schedulingQueue.add(
+          { campaignId },
+          {
+            delay,
+            jobId,
+            removeOnComplete: true,
+            removeOnFail: false,
+          }
+        );
+        console.log(`Campaign ${campaignId} rescheduled for ${scheduledAt.toISOString()}`);
+      }
+    }
+
+    return updatedCampaign;
   }
 
   async deleteCampaign(userId: number, campaignId: number) {
@@ -199,6 +256,20 @@ export class CampaignService {
 
     if (result.rows.length === 0) {
       throw createError('Campaign not found', 404);
+    }
+
+    // Remove from scheduling queue if exists
+    try {
+      const schedulingQueue = getSchedulingQueue();
+      const jobId = `campaign-${campaignId}`;
+      const existingJob = await schedulingQueue.getJob(jobId);
+      if (existingJob) {
+        await existingJob.remove();
+        console.log(`Removed scheduled job for campaign ${campaignId}`);
+      }
+    } catch (error) {
+      // Log but don't fail if queue removal fails
+      console.error(`Failed to remove scheduled job for campaign ${campaignId}:`, error);
     }
   }
 
