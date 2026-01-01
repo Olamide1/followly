@@ -1,6 +1,6 @@
 import { pool } from '../database/connection';
 import { createError } from '../middleware/errorHandler';
-import { getAutomationQueue } from './queues';
+// import { getAutomationQueue } from './queues'; // DISABLED: Temporarily commented out
 
 export interface AutomationTrigger {
   type: 'contact_created' | 'added_to_list' | 'field_equals' | 'time_since_signup';
@@ -234,6 +234,10 @@ export class AutomationService {
     contactId: number,
     triggerData?: Record<string, any>
   ) {
+    // Suppress unused parameter warnings - only used in disabled queue code
+    void userId;
+    void triggerData;
+    
     // Check if execution already exists (prevent duplicates)
     const existing = await pool.query(
       'SELECT id FROM automation_executions WHERE automation_id = $1 AND contact_id = $2',
@@ -252,15 +256,15 @@ export class AutomationService {
       [automationId, contactId]
     );
 
-    // Queue first step
-    const automationQueue = getAutomationQueue();
-    await automationQueue.add({
-      userId,
-      automationId,
-      contactId,
-      stepOrder: 1,
-      triggerData,
-    });
+    // Queue first step - DISABLED: Temporarily commented out
+    // const automationQueue = getAutomationQueue();
+    // await automationQueue.add({
+    //   userId,
+    //   automationId,
+    //   contactId,
+    //   stepOrder: 1,
+    //   triggerData,
+    // });
   }
 
   async processAutomationStep(
@@ -322,23 +326,26 @@ export class AutomationService {
     // Schedule next step
     const delayHours = step.delay_hours || 0;
     const nextStepOrder = stepOrder + 1;
+    // Suppress unused variable warning - nextStepOrder only used in disabled queue code
+    void nextStepOrder;
 
     if (delayHours > 0) {
-      const automationQueue = getAutomationQueue();
-      await automationQueue.add(
-        {
-          userId,
-          automationId,
-          contactId,
-          stepOrder: nextStepOrder,
-        },
-        {
-          delay: delayHours * 60 * 60 * 1000, // Convert hours to milliseconds
-        }
-      );
+      // DISABLED: Temporarily commented out
+      // const automationQueue = getAutomationQueue();
+      // await automationQueue.add(
+      //   {
+      //     userId,
+      //     automationId,
+      //     contactId,
+      //     stepOrder: nextStepOrder,
+      //   },
+      //   {
+      //     delay: delayHours * 60 * 60 * 1000, // Convert hours to milliseconds
+      //   }
+      // );
     } else {
-      // Process immediately
-      await this.processAutomationStep(userId, automationId, contactId, nextStepOrder);
+      // Process immediately - DISABLED: Temporarily commented out
+      // await this.processAutomationStep(userId, automationId, contactId, nextStepOrder);
     }
   }
 
