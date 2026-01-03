@@ -4,6 +4,7 @@ dotenv.config(); // Must be first, before any other imports that use env vars
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import path from 'path';
 import { createServer } from 'http';
 import { initializeDatabase } from './database/connection';
 import { initializeRedis } from './services/redis';
@@ -36,7 +37,18 @@ if (isProduction) {
 }
 
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: isProduction ? {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", PROD_URL],
+    },
+  } : false,
+}));
 app.use(cors({
   origin: process.env.FRONTEND_URL || (isProduction ? PROD_URL : DEV_URL),
   credentials: true,
@@ -60,13 +72,23 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/compliance', complianceRoutes);
 
-// 404 handler - respond directly without logging as error
-app.use((req, res) => {
-  res.status(404).json({ 
-    error: 'Route not found',
-    path: req.path,
+// Serve frontend static files in production
+if (isProduction) {
+  const frontendPath = path.join(__dirname, '../../frontend/dist');
+  
+  // Serve static assets
+  app.use(express.static(frontendPath));
+  
+  // SPA fallback - serve index.html for all non-API routes
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(frontendPath, 'index.html'));
   });
-});
+} else {
+  // 404 handler for development (frontend runs separately)
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'Route not found', path: _req.originalUrl || _req.path });
+  });
+}
 
 // Error handling (for actual errors)
 app.use(errorHandler);
