@@ -5,6 +5,8 @@ import { Pool, PoolClient } from 'pg';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
+console.log('TEST ENV:', process.env.TEST);
+
 // Heroku provides DATABASE_URL, use it if available
 // Otherwise fall back to individual env vars for local dev
 const pool = new Pool({
