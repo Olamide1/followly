@@ -9,9 +9,18 @@ export interface RoutingDecision {
 
 export class RoutingService {
   private providerService: EmailProviderService;
+  private redis: ReturnType<typeof getRedisClient> | null = null;
 
   constructor(providerService: EmailProviderService) {
     this.providerService = providerService;
+  }
+
+  // Cache Redis client for the instance lifetime
+  private getRedis() {
+    if (!this.redis) {
+      this.redis = getRedisClient();
+    }
+    return this.redis;
   }
 
   async selectProvider(
@@ -102,27 +111,30 @@ export class RoutingService {
     userId: number,
     provider: ProviderType
   ): Promise<boolean> {
-    const redis = getRedisClient();
-    
-    // Check daily limit
+    // Check if provider is configured first (no Redis call needed)
+    if (!this.providerService.hasProvider(provider)) {
+      return false;
+    }
+
+    const redis = this.getRedis();
     const today = new Date().toISOString().split('T')[0];
-    const key = `provider:${userId}:${provider}:${today}:count`;
-    const count = await redis.get(key);
-    const dailyLimit = await this.getProviderDailyLimit(userId, provider);
-    
+    const countKey = `provider:${userId}:${provider}:${today}:count`;
+    const errorKey = `provider:${userId}:${provider}:errors:${Date.now() - 3600000}`;
+
+    // Batch Redis calls with multi/pipeline
+    const [count, errorCount, dailyLimit] = await Promise.all([
+      redis.get(countKey),
+      redis.get(errorKey),
+      this.getProviderDailyLimit(userId, provider),
+    ]);
+
+    // Check daily limit
     if (count && parseInt(count) >= dailyLimit) {
       return false;
     }
 
     // Check error rate (last hour)
-    const errorKey = `provider:${userId}:${provider}:errors:${Date.now() - 3600000}`;
-    const errorCount = await redis.get(errorKey);
     if (errorCount && parseInt(errorCount) > 10) {
-      return false; // Too many errors recently
-    }
-
-    // Check if provider is configured
-    if (!this.providerService.hasProvider(provider)) {
       return false;
     }
 
@@ -154,17 +166,22 @@ export class RoutingService {
     provider: ProviderType,
     success: boolean
   ): Promise<void> {
-    const redis = getRedisClient();
+    const redis = this.getRedis();
     const today = new Date().toISOString().split('T')[0];
     
     if (success) {
       const key = `provider:${userId}:${provider}:${today}:count`;
-      await redis.incr(key);
-      await redis.expire(key, 86400); // 24 hours
+      // Use multi to batch commands
+      await redis.multi()
+        .incr(key)
+        .expire(key, 86400)
+        .exec();
     } else {
       const errorKey = `provider:${userId}:${provider}:errors:${Date.now()}`;
-      await redis.incr(errorKey);
-      await redis.expire(errorKey, 3600); // 1 hour
+      await redis.multi()
+        .incr(errorKey)
+        .expire(errorKey, 3600)
+        .exec();
     }
   }
 }
