@@ -1,7 +1,9 @@
+import dotenv from 'dotenv';
+dotenv.config(); // Must be first, before any other imports that use env vars
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { initializeDatabase } from './database/connection';
 import { initializeRedis } from './services/redis';
@@ -19,16 +21,18 @@ import analyticsRoutes from './routes/analytics';
 import providerRoutes from './routes/providers';
 import complianceRoutes from './routes/compliance';
 
-dotenv.config();
-
 const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 3000;
 
+const isProduction = process.env.NODE_ENV === 'production';
+const PROD_URL = 'https://followly-1a83c23a0be1.herokuapp.com';
+const DEV_URL = 'http://localhost:5174';
+
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5174',
+  origin: process.env.FRONTEND_URL || (isProduction ? PROD_URL : DEV_URL),
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));

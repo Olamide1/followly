@@ -1,7 +1,7 @@
-import { Pool, PoolClient } from 'pg';
 import dotenv from 'dotenv';
+dotenv.config(); // Must be first, before any other imports that use env vars
 
-dotenv.config();
+import { Pool, PoolClient } from 'pg';
 
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
