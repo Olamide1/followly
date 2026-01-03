@@ -3,12 +3,22 @@ dotenv.config(); // Must be first, before any other imports that use env vars
 
 import { Pool, PoolClient } from 'pg';
 
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Heroku provides DATABASE_URL, use it if available
+// Otherwise fall back to individual env vars for local dev
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'followly',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'password',
+  connectionString: process.env.DATABASE_URL,
+  // Individual vars as fallback (for local dev without DATABASE_URL)
+  ...(!process.env.DATABASE_URL && {
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432'),
+    database: process.env.DB_NAME || 'followly',
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || 'password',
+  }),
+  // SSL required for Heroku
+  ssl: isProduction ? { rejectUnauthorized: false } : false,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
