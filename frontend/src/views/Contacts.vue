@@ -966,8 +966,22 @@ async function bulkAddContactsToList(listId: number) {
 
     await api.post(`/lists/${numListId}/contacts/bulk`, { contactIds })
     
-    // Reload lists for all affected contacts
-    await Promise.all(contactIds.map(id => loadContactListsForContact(id)))
+    // Reload lists for all affected contacts using batch endpoint (prevents rate limiting)
+    try {
+      const response = await api.post('/contacts/lists/batch', { contactIds })
+      if (response.data.listsByContact) {
+        Object.assign(contactLists.value, response.data.listsByContact)
+      }
+      // Ensure all affected contacts have an entry (even if empty)
+      for (const contactId of contactIds) {
+        if (!contactLists.value[contactId]) {
+          contactLists.value[contactId] = []
+        }
+      }
+    } catch (error) {
+      console.error('Failed to reload contact lists after bulk add:', error)
+      // Non-critical error - lists will refresh on next page load
+    }
     
     alert(`Successfully added ${contactIds.length} contact${contactIds.length === 1 ? '' : 's'} to list`)
     selectedContacts.value.clear()
