@@ -503,7 +503,15 @@ export class CampaignService {
    */
   async recoverScheduledCampaigns(): Promise<number> {
     try {
-      const schedulingQueue = getSchedulingQueue();
+      // Check if queue is initialized before attempting recovery
+      let schedulingQueue;
+      try {
+        schedulingQueue = getSchedulingQueue();
+      } catch (queueError) {
+        // Queue not initialized - skip recovery
+        console.warn('Scheduling queue not available, skipping campaign recovery');
+        return 0;
+      }
       
       // Find all scheduled campaigns
       const result = await pool.query(

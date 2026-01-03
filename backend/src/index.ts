@@ -100,30 +100,42 @@ async function startServer() {
     await initializeRedis();
     await initializeQueues();
     
-    // Recover any scheduled campaigns that might not be in the queue
-    // This ensures campaigns aren't stranded after server restarts or Redis issues
-    try {
-      const { CampaignService } = await import('./services/campaigns');
-      const { RoutingService } = await import('./services/routing');
-      const { EmailProviderService } = await import('./services/providers');
-      const { WarmupService } = await import('./services/warmup');
-      
-      const campaignService = new CampaignService(
-        new RoutingService(new EmailProviderService()),
-        new EmailProviderService(),
-        new WarmupService()
-      );
-      
-      await campaignService.recoverScheduledCampaigns();
-    } catch (recoveryError) {
-      // Log but don't fail startup - recovery is best effort
-      console.warn('Campaign recovery failed (non-critical):', recoveryError);
-    }
-    
+    // Start server immediately - don't block on recovery
     httpServer.listen(PORT, () => {
       console.log(`🚀 Followly API server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
     });
+    
+    // Recover any scheduled campaigns in background (non-blocking)
+    // This ensures campaigns aren't stranded after server restarts or Redis issues
+    // Run with timeout to prevent hanging
+    setTimeout(async () => {
+      try {
+        const { CampaignService } = await import('./services/campaigns');
+        const { RoutingService } = await import('./services/routing');
+        const { EmailProviderService } = await import('./services/providers');
+        const { WarmupService } = await import('./services/warmup');
+        
+        const campaignService = new CampaignService(
+          new RoutingService(new EmailProviderService()),
+          new EmailProviderService(),
+          new WarmupService()
+        );
+        
+        // Run recovery with timeout
+        await Promise.race([
+          campaignService.recoverScheduledCampaigns(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Recovery timeout')), 30000)) // 30 second timeout
+        ]);
+      } catch (recoveryError: any) {
+        // Log but don't fail - recovery is best effort
+        if (recoveryError?.message === 'Recovery timeout') {
+          console.warn('Campaign recovery timed out (non-critical)');
+        } else {
+          console.warn('Campaign recovery failed (non-critical):', recoveryError?.message || recoveryError);
+        }
+      }
+    }, 2000); // Wait 2 seconds after server starts
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
