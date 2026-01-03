@@ -2,10 +2,12 @@ import dotenv from 'dotenv';
 dotenv.config(); // Must be first, before any other imports that use env vars
 
 import { Pool, PoolClient } from 'pg';
+import dns from 'dns';
+
+// Force IPv4 - Heroku doesn't fully support IPv6 outbound
+dns.setDefaultResultOrder('ipv4first');
 
 const isProduction = process.env.NODE_ENV === 'production';
-
-console.log('TEST ENV:', process.env.TEST);
 
 // Heroku provides DATABASE_URL, use it if available
 // Otherwise fall back to individual env vars for local dev
@@ -19,7 +21,7 @@ const pool = new Pool({
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'password',
   }),
-  // SSL required for Heroku
+  // SSL required for Heroku/Supabase
   ssl: isProduction ? { rejectUnauthorized: false } : false,
   max: 20,
   idleTimeoutMillis: 30000,
