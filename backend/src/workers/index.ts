@@ -24,13 +24,13 @@ function getRedisConfig() {
       tls: {
         rejectUnauthorized: false, // Required for Heroku Redis self-signed certs
       },
-      maxRetriesPerRequest: 3, // Reduce retries to fail faster
+      // Note: Bull doesn't allow enableReadyCheck or maxRetriesPerRequest
+      // These are handled internally by Bull
       retryStrategy: (times: number) => {
         // Exponential backoff with max delay
         const delay = Math.min(times * 50, 2000);
         return delay;
       },
-      enableReadyCheck: true,
       enableOfflineQueue: false, // Don't queue commands when offline
     };
   }
