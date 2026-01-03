@@ -8,7 +8,7 @@ import { createServer } from 'http';
 import { initializeDatabase } from './database/connection';
 import { initializeRedis } from './services/redis';
 import { initializeQueues } from './services/queues';
-import { errorHandler, createError } from './middleware/errorHandler';
+import { errorHandler } from './middleware/errorHandler';
 import { rateLimiter } from './middleware/rateLimiter';
 
 // Routes
@@ -60,13 +60,16 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/compliance', complianceRoutes);
 
-// Error handling
-app.use(errorHandler);
-
-// 404 handler
-app.use((_req, _res, next) => {
-  next(createError('Route not found', 404));
+// 404 handler - respond directly without logging as error
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.path,
+  });
 });
+
+// Error handling (for actual errors)
+app.use(errorHandler);
 
 // Initialize services
 async function startServer() {
