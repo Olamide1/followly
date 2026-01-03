@@ -17,14 +17,36 @@ export async function processSchedulingQueue(job: Job) {
 
     const campaign = result.rows[0];
 
+    // Validate scheduled_at exists and is valid
+    if (!campaign.scheduled_at) {
+      console.error(`Campaign ${campaignId} has null/undefined scheduled_at`);
+      throw new Error(`Campaign ${campaignId} has no scheduled time`);
+    }
+
     // Check if it's time to send
     const scheduledAt = new Date(campaign.scheduled_at);
-    const now = new Date();
+    const scheduledTime = scheduledAt.getTime();
+    
+    // Validate: must be a valid date (not NaN) and not epoch (1970-01-01)
+    // Epoch date (0) or invalid dates should be rejected
+    if (isNaN(scheduledTime) || scheduledTime === 0) {
+      console.error(`Invalid scheduled_at date for campaign ${campaignId}: ${campaign.scheduled_at}`);
+      throw new Error(`Invalid scheduled_at date for campaign ${campaignId}`);
+    }
 
-    if (now < scheduledAt) {
-      // Not time yet, reschedule
-      const delay = scheduledAt.getTime() - now.getTime();
-      await job.moveToDelayed(delay);
+    const now = new Date();
+    const nowTime = now.getTime();
+
+    // Validate: scheduled time must be in the future (reasonable check: at least 1 second in future)
+    // This prevents processing campaigns with past dates or epoch dates
+    if (scheduledTime <= nowTime) {
+      // If scheduled time has passed, we should still send it (it's overdue)
+      // But log a warning
+      console.warn(`Campaign ${campaignId} scheduled time has passed (${scheduledAt.toISOString()}), sending now`);
+    } else {
+      // Not time yet, reschedule - moveToDelayed expects a timestamp, not a delay
+      const targetTimestamp = scheduledTime;
+      await job.moveToDelayed(targetTimestamp);
       return;
     }
 

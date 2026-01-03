@@ -62,21 +62,57 @@ export class CampaignService {
 
     // If scheduled, add to scheduling queue
     if (data.scheduled_at) {
+      // Validate scheduled_at date
       const scheduledAt = new Date(data.scheduled_at);
+      if (isNaN(scheduledAt.getTime())) {
+        // Invalid date - update status back to draft
+        await pool.query(
+          'UPDATE campaigns SET status = $1 WHERE id = $2',
+          ['draft', campaign.id]
+        );
+        throw createError('Invalid scheduled date format', 400);
+      }
+
       const now = new Date();
       const delay = Math.max(0, scheduledAt.getTime() - now.getTime());
 
-      const schedulingQueue = getSchedulingQueue();
-      await schedulingQueue.add(
-        { campaignId: campaign.id },
-        {
-          delay,
-          jobId: `campaign-${campaign.id}`, // Unique job ID to prevent duplicates
-          removeOnComplete: true,
-          removeOnFail: false,
+      // Only schedule if in the future
+      if (delay > 0) {
+        try {
+          const schedulingQueue = getSchedulingQueue();
+          const job = await schedulingQueue.add(
+            { campaignId: campaign.id },
+            {
+              delay,
+              jobId: `campaign-${campaign.id}`, // Unique job ID to prevent duplicates
+              removeOnComplete: true,
+              removeOnFail: false,
+            }
+          );
+          console.log(`✅ Campaign ${campaign.id} scheduled for ${scheduledAt.toISOString()} (Job ID: ${job.id})`);
+        } catch (queueError: any) {
+          // Queue operation failed - update status back to draft to prevent stranded campaigns
+          console.error(`Failed to add campaign ${campaign.id} to scheduling queue:`, queueError);
+          await pool.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['draft', campaign.id]
+          );
+          // Return campaign with updated status
+          campaign.status = 'draft';
+          throw createError(
+            'Campaign saved but scheduling failed. The scheduling service may be temporarily unavailable. Please try scheduling again later.',
+            503
+          );
         }
-      );
-      console.log(`Campaign ${campaign.id} scheduled for ${scheduledAt.toISOString()}`);
+      } else {
+        // Scheduled time is in the past - update status back to draft
+        await pool.query(
+          'UPDATE campaigns SET status = $1 WHERE id = $2',
+          ['draft', campaign.id]
+        );
+        campaign.status = 'draft';
+        throw createError('Scheduled time must be in the future', 400);
+      }
     }
 
     return campaign;
@@ -215,34 +251,82 @@ export class CampaignService {
     const updatedCampaign = await this.getCampaign(userId, campaignId);
 
     // Handle scheduling queue updates
-    const schedulingQueue = getSchedulingQueue();
-    const jobId = `campaign-${campaignId}`;
+    try {
+      const schedulingQueue = getSchedulingQueue();
+      const jobId = `campaign-${campaignId}`;
 
-    // Remove existing scheduled job if any
-    const existingJob = await schedulingQueue.getJob(jobId);
-    if (existingJob) {
-      await existingJob.remove();
-    }
-
-    // If new scheduled_at is set, add to queue
-    if (updatedCampaign.scheduled_at && updatedCampaign.status === 'scheduled') {
-      const scheduledAt = new Date(updatedCampaign.scheduled_at);
-      const now = new Date();
-      const delay = Math.max(0, scheduledAt.getTime() - now.getTime());
-
-      // Only schedule if in the future
-      if (delay > 0) {
-        await schedulingQueue.add(
-          { campaignId },
-          {
-            delay,
-            jobId,
-            removeOnComplete: true,
-            removeOnFail: false,
-          }
-        );
-        console.log(`Campaign ${campaignId} rescheduled for ${scheduledAt.toISOString()}`);
+      // Remove existing scheduled job if any
+      try {
+        const existingJob = await schedulingQueue.getJob(jobId);
+        if (existingJob) {
+          await existingJob.remove();
+        }
+      } catch (removeError) {
+        // Log but don't fail if job removal fails
+        console.warn(`Failed to remove existing scheduled job for campaign ${campaignId}:`, removeError);
       }
+
+      // If new scheduled_at is set, add to queue
+      if (updatedCampaign.scheduled_at && updatedCampaign.status === 'scheduled') {
+        // Validate scheduled_at date
+        const scheduledAt = new Date(updatedCampaign.scheduled_at);
+        if (isNaN(scheduledAt.getTime())) {
+          // Invalid date - update status back to draft
+          await pool.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['draft', campaignId]
+          );
+          throw createError('Invalid scheduled date format', 400);
+        }
+
+        const now = new Date();
+        const delay = Math.max(0, scheduledAt.getTime() - now.getTime());
+
+        // Only schedule if in the future
+        if (delay > 0) {
+          const job = await schedulingQueue.add(
+            { campaignId },
+            {
+              delay,
+              jobId,
+              removeOnComplete: true,
+              removeOnFail: false,
+            }
+          );
+          console.log(`✅ Campaign ${campaignId} rescheduled for ${scheduledAt.toISOString()} (Job ID: ${job.id})`);
+        } else {
+          // Scheduled time is in the past - update status back to draft
+          await pool.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['draft', campaignId]
+          );
+          updatedCampaign.status = 'draft';
+          throw createError('Scheduled time must be in the future', 400);
+        }
+      }
+    } catch (queueError: any) {
+      // If it's already a createError, rethrow it
+      if (queueError.statusCode) {
+        throw queueError;
+      }
+      
+      // Queue operation failed - update status back to draft to prevent stranded campaigns
+      console.error(`Failed to update scheduling queue for campaign ${campaignId}:`, queueError);
+      
+      // Only update status if campaign was supposed to be scheduled
+      if (updatedCampaign.scheduled_at && updatedCampaign.status === 'scheduled') {
+        await pool.query(
+          'UPDATE campaigns SET status = $1 WHERE id = $2',
+          ['draft', campaignId]
+        );
+        updatedCampaign.status = 'draft';
+        throw createError(
+          'Campaign updated but scheduling failed. The scheduling service may be temporarily unavailable. Please try scheduling again later.',
+          503
+        );
+      }
+      // If not scheduling, just log the error but don't fail the update
+      console.warn(`Queue error for campaign ${campaignId} (not scheduling):`, queueError);
     }
 
     return updatedCampaign;
@@ -411,6 +495,94 @@ export class CampaignService {
       clickRate: sent > 0 ? ((parseInt(events.clicks) || 0) / sent * 100).toFixed(2) : '0.00',
       deliveryRate: sent > 0 ? (delivered / sent * 100).toFixed(2) : '0.00',
     };
+  }
+
+  /**
+   * Recovery function: Re-queue any scheduled campaigns that aren't in the queue
+   * This should be called on server startup to ensure no campaigns are stranded
+   */
+  async recoverScheduledCampaigns(): Promise<number> {
+    try {
+      const schedulingQueue = getSchedulingQueue();
+      
+      // Find all scheduled campaigns
+      const result = await pool.query(
+        `SELECT id, scheduled_at, user_id 
+         FROM campaigns 
+         WHERE status = 'scheduled' 
+         AND scheduled_at IS NOT NULL 
+         AND scheduled_at > CURRENT_TIMESTAMP
+         ORDER BY scheduled_at ASC`
+      );
+
+      let recovered = 0;
+      const now = new Date();
+
+      for (const campaign of result.rows) {
+        // Validate scheduled_at exists and is valid
+        if (!campaign.scheduled_at) {
+          console.warn(`Campaign ${campaign.id} has null/undefined scheduled_at, skipping recovery`);
+          continue;
+        }
+
+        const scheduledAt = new Date(campaign.scheduled_at);
+        const scheduledTime = scheduledAt.getTime();
+        
+        // Validate: must be a valid date (not NaN) and not epoch (1970-01-01)
+        if (isNaN(scheduledTime) || scheduledTime === 0) {
+          console.warn(`Campaign ${campaign.id} has invalid scheduled_at (${campaign.scheduled_at}), skipping recovery`);
+          continue;
+        }
+
+        const delay = Math.max(0, scheduledTime - now.getTime());
+        
+        if (delay > 0) {
+          try {
+            const jobId = `campaign-${campaign.id}`;
+            
+            // Check if job already exists
+            const existingJob = await schedulingQueue.getJob(jobId);
+            if (existingJob) {
+              // Job exists, skip
+              continue;
+            }
+
+            // Add to queue
+            await schedulingQueue.add(
+              { campaignId: campaign.id },
+              {
+                delay,
+                jobId,
+                removeOnComplete: true,
+                removeOnFail: false,
+              }
+            );
+            recovered++;
+            console.log(`Recovered scheduled campaign ${campaign.id} for ${scheduledAt.toISOString()}`);
+          } catch (error: any) {
+            console.error(`Failed to recover campaign ${campaign.id}:`, error);
+            // Don't throw - continue with other campaigns
+          }
+        } else {
+          // Scheduled time has passed - update status to draft
+          console.warn(`Campaign ${campaign.id} scheduled time has passed, setting to draft`);
+          await pool.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['draft', campaign.id]
+          );
+        }
+      }
+
+      if (recovered > 0) {
+        console.log(`✅ Recovered ${recovered} scheduled campaign(s) on startup`);
+      }
+      
+      return recovered;
+    } catch (error: any) {
+      // If queue is not available, log but don't crash
+      console.error('Failed to recover scheduled campaigns (queue may be unavailable):', error);
+      return 0;
+    }
   }
 }
 

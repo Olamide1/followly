@@ -100,6 +100,26 @@ async function startServer() {
     await initializeRedis();
     await initializeQueues();
     
+    // Recover any scheduled campaigns that might not be in the queue
+    // This ensures campaigns aren't stranded after server restarts or Redis issues
+    try {
+      const { CampaignService } = await import('./services/campaigns');
+      const { RoutingService } = await import('./services/routing');
+      const { EmailProviderService } = await import('./services/providers');
+      const { WarmupService } = await import('./services/warmup');
+      
+      const campaignService = new CampaignService(
+        new RoutingService(new EmailProviderService()),
+        new EmailProviderService(),
+        new WarmupService()
+      );
+      
+      await campaignService.recoverScheduledCampaigns();
+    } catch (recoveryError) {
+      // Log but don't fail startup - recovery is best effort
+      console.warn('Campaign recovery failed (non-critical):', recoveryError);
+    }
+    
     httpServer.listen(PORT, () => {
       console.log(`🚀 Followly API server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
