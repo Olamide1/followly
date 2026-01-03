@@ -80,12 +80,12 @@ if (isProduction) {
   app.use(express.static(frontendPath));
   
   // SPA fallback - serve index.html for all non-API routes
-  app.get('*', (_, res) => {
+  app.get('*', (_req: express.Request, res: express.Response) => {
     res.sendFile(path.join(frontendPath, 'index.html'));
   });
 } else {
   // 404 handler for development (frontend runs separately)
-  app.use((_req, res) => {
+  app.use((_req: express.Request, res: express.Response) => {
     res.status(404).json({ error: 'Route not found', path: _req.originalUrl || _req.path });
   });
 }
