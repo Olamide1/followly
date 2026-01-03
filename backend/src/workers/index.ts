@@ -31,7 +31,7 @@ function getRedisConfig() {
         const delay = Math.min(times * 50, 2000);
         return delay;
       },
-      enableOfflineQueue: false, // Don't queue commands when offline
+      enableOfflineQueue: true, // Queue commands while reconnecting
     };
   }
   
@@ -46,23 +46,19 @@ const emailQueue = new Bull('email', { redis: redisConfig });
 const automationQueue = new Bull('automation', { redis: redisConfig });
 const schedulingQueue = new Bull('scheduling', { redis: redisConfig });
 
-// Register processors
-emailQueue.process(async (job) => {
-  console.log(`Processing email job ${job.id}`);
-  return processEmailQueue(job);
-});
-
-automationQueue.process(async (job) => {
-  console.log(`Processing automation job ${job.id}`);
-  return processAutomationQueue(job);
-});
-
-schedulingQueue.process(async (job) => {
-  console.log(`Processing scheduling job ${job.id}`);
-  return processSchedulingQueue(job);
-});
-
 // Error handling
+emailQueue.on('error', (err) => {
+  console.error('Email queue error:', err.message);
+});
+
+automationQueue.on('error', (err) => {
+  console.error('Automation queue error:', err.message);
+});
+
+schedulingQueue.on('error', (err) => {
+  console.error('Scheduling queue error:', err.message);
+});
+
 emailQueue.on('failed', (job, err) => {
   console.error(`Email job ${job.id} failed:`, err.message);
 });
@@ -75,5 +71,39 @@ schedulingQueue.on('failed', (job, err) => {
   console.error(`Scheduling job ${job.id} failed:`, err.message);
 });
 
-console.log('🚀 Combined worker started - listening for email, automation, and scheduling jobs');
+// Wait for Redis connection before starting processors
+async function startWorkers() {
+  try {
+    await Promise.all([
+      emailQueue.isReady(),
+      automationQueue.isReady(),
+      schedulingQueue.isReady(),
+    ]);
+
+    console.log('✅ Redis connection ready');
+
+    // Register processors
+    emailQueue.process(async (job) => {
+      console.log(`Processing email job ${job.id}`);
+      return processEmailQueue(job);
+    });
+
+    automationQueue.process(async (job) => {
+      console.log(`Processing automation job ${job.id}`);
+      return processAutomationQueue(job);
+    });
+
+    schedulingQueue.process(async (job) => {
+      console.log(`Processing scheduling job ${job.id}`);
+      return processSchedulingQueue(job);
+    });
+
+    console.log('🚀 Combined worker started - listening for email, automation, and scheduling jobs');
+  } catch (error) {
+    console.error('Failed to start workers:', error);
+    process.exit(1);
+  }
+}
+
+startWorkers();
 
