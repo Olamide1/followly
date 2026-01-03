@@ -59,4 +59,4 @@ $ git commit -am "make it better"
 $ git push heroku main
 
 After deploying, scale the workers with:
-heroku ps:scale email_worker=1 automation_worker=1 scheduling_worker=1
+heroku ps:scale worker=1
