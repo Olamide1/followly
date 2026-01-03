@@ -35,7 +35,7 @@ function getRedisConfig() {
         const delay = Math.min(times * 50, 2000);
         return delay;
       },
-      enableOfflineQueue: false, // Don't queue commands when offline
+      enableOfflineQueue: true, // Queue commands while reconnecting
     };
   }
   
@@ -59,6 +59,14 @@ export async function initializeQueues(): Promise<void> {
     schedulingQueue.on('error', (error) => {
       console.error('Scheduling queue error:', error);
     });
+
+    // Wait for queues to be ready before processing
+    await Promise.all([
+      emailQueue.isReady(),
+      schedulingQueue.isReady(),
+    ]);
+
+    console.log('✅ Redis connection ready');
 
     // Process queues
     emailQueue.process(processEmailQueue);
