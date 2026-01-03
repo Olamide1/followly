@@ -29,6 +29,12 @@ const isProduction = process.env.NODE_ENV === 'production';
 const PROD_URL = 'https://followly-1a83c23a0be1.herokuapp.com';
 const DEV_URL = 'http://localhost:5174';
 
+// Trust proxy - required for Heroku (behind load balancer)
+// This allows express-rate-limit to correctly identify users by IP
+if (isProduction) {
+  app.set('trust proxy', 1);
+}
+
 // Middleware
 app.use(helmet());
 app.use(cors({
