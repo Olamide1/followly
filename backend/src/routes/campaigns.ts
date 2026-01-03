@@ -161,7 +161,7 @@ router.post('/test-send', async (req: AuthRequest, res: Response, next: NextFunc
 
     return res.json({ success: true, message: 'Test email sent successfully' });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 

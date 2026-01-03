@@ -57,3 +57,6 @@ Commit your code to the repository and deploy it to Heroku using Git.
 $ git add .
 $ git commit -am "make it better"
 $ git push heroku main
+
+After deploying, scale the workers with:
+heroku ps:scale email_worker=1 automation_worker=1 scheduling_worker=1
