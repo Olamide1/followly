@@ -1,7 +1,12 @@
+import dotenv from 'dotenv';
+dotenv.config(); // Must be first, before any other imports that use env vars
+
 import Bull from 'bull';
 import { processEmailQueue } from './emailWorker';
 import { processAutomationQueue } from './automationWorker';
 import { processSchedulingQueue } from './schedulingWorker';
+import { initializeRedis } from '../services/redis';
+import { initializeDatabase } from '../database/connection';
 
 // Parse Redis URL and configure for Heroku TLS
 function getRedisConfig() {
@@ -74,6 +79,11 @@ schedulingQueue.on('failed', (job, err) => {
 // Wait for Redis connection before starting processors
 async function startWorkers() {
   try {
+    // Initialize database and Redis first (required by services)
+    await initializeDatabase();
+    await initializeRedis();
+    
+    // Wait for Bull queues to be ready
     await Promise.all([
       emailQueue.isReady(),
       automationQueue.isReady(),
