@@ -79,6 +79,7 @@ async function runMigrations(): Promise<void> {
       createCustomFieldsTable,
       createTagsTable,
       createContactTagsTable,
+      createTrackingTokensTable,
       addUserFooterSettings,
     ];
     
@@ -386,6 +387,27 @@ async function createSuppressionListTable(client: PoolClient): Promise<void> {
   
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_suppression_list_email ON suppression_list(email)
+  `);
+}
+
+async function createTrackingTokensTable(client: PoolClient): Promise<void> {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS tracking_tokens (
+      id SERIAL PRIMARY KEY,
+      email_queue_id INTEGER REFERENCES email_queue(id) ON DELETE CASCADE,
+      contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+      campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
+      token VARCHAR(64) NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_tracking_tokens_token ON tracking_tokens(token)
+  `);
+  
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_tracking_tokens_email_queue_id ON tracking_tokens(email_queue_id)
   `);
 }
 

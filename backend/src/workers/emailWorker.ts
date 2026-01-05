@@ -3,6 +3,13 @@ import { pool } from '../database/connection';
 import { RoutingService } from '../services/routing';
 import { EmailProviderService, ProviderConfig } from '../services/providers';
 import { WarmupService } from '../services/warmup';
+import {
+  generateTrackingToken,
+  storeTrackingToken,
+  getTrackingPixelUrl,
+  addTrackingPixel,
+  wrapLinksWithTracking,
+} from '../services/tracking';
 
 let routingService: RoutingService | null = null;
 let warmupService: WarmupService | null = null;
@@ -114,6 +121,9 @@ export async function processEmailQueue(job: Job) {
     fromName,
   } = job.data;
 
+  // Declare finalEmailQueueId outside try block so it's available in catch block (Bug 2 fix)
+  let finalEmailQueueId: number | undefined = emailQueueId;
+
   try {
     // Initialize services
     if (!routingService) {
@@ -140,18 +150,49 @@ export async function processEmailQueue(job: Job) {
     );
 
     if (suppressed.rows.length > 0) {
-      if (emailQueueId) {
+      // Use finalEmailQueueId if available, otherwise fallback
+      if (finalEmailQueueId) {
         await pool.query(
           `UPDATE email_queue SET status = 'failed', error_message = 'Contact suppressed' 
            WHERE id = $1`,
-          [emailQueueId]
+          [finalEmailQueueId]
         );
       } else {
         // Fallback for backward compatibility
+        // Handle NULL values correctly: only use IS NULL when BOTH are NULL
+        // Otherwise, only match the provided non-NULL value
+        let whereClause: string;
+        const params: any[] = [contactId];
+        
+        if (campaignId !== null && campaignId !== undefined && automationId !== null && automationId !== undefined) {
+          // Both provided: match either
+          whereClause = 'contact_id = $1 AND (campaign_id = $2 OR automation_id = $3)';
+          params.push(campaignId, automationId);
+        } else if (campaignId !== null && campaignId !== undefined) {
+          // Only campaignId provided: match only campaign_id
+          whereClause = 'contact_id = $1 AND campaign_id = $2';
+          params.push(campaignId);
+        } else if (automationId !== null && automationId !== undefined) {
+          // Only automationId provided: match only automation_id
+          whereClause = 'contact_id = $1 AND automation_id = $2';
+          params.push(automationId);
+        } else {
+          // Both NULL: match both NULL
+          whereClause = 'contact_id = $1 AND campaign_id IS NULL AND automation_id IS NULL';
+        }
+        
+        // Use subquery to find the most recent record first, then update by ID
+        // (PostgreSQL doesn't support ORDER BY/LIMIT in UPDATE statements)
+        // This ensures only one record is updated, preventing unrelated emails from being marked as suppressed
         await pool.query(
           `UPDATE email_queue SET status = 'failed', error_message = 'Contact suppressed' 
-           WHERE contact_id = $1 AND (campaign_id = $2 OR automation_id = $3)`,
-          [contactId, campaignId, automationId]
+           WHERE id = (
+             SELECT id FROM email_queue
+             WHERE ${whereClause}
+             ORDER BY created_at DESC
+             LIMIT 1
+           )`,
+          params
         );
       }
       return;
@@ -180,29 +221,42 @@ export async function processEmailQueue(job: Job) {
       throw new Error(`Provider ${routingDecision.provider} not available for user ${userId}`);
     }
 
-    // Send email
-    const result = await emailProvider.sendEmail({
-      to: toEmail,
-      subject,
-      htmlContent: content,
-      fromEmail,
-      fromName,
-    });
-
-    // Record success - use emailQueueId if available, otherwise fallback to lookup
-    let finalEmailQueueId = emailQueueId;
+    // Ensure we have finalEmailQueueId BEFORE sending email (Bug 1 fix)
+    // This ensures tracking is always added if a record exists or can be created
     if (!finalEmailQueueId) {
-      // Fallback: try to find existing record
+      // Try to find existing record
+      // Handle NULL values correctly: only use IS NULL when BOTH are NULL
+      // Otherwise, only match the provided non-NULL value
+      let whereClause: string;
+      const params: any[] = [contactId];
+      
+      if (campaignId !== null && campaignId !== undefined && automationId !== null && automationId !== undefined) {
+        // Both provided: match either
+        whereClause = 'contact_id = $1 AND (campaign_id = $2 OR automation_id = $3)';
+        params.push(campaignId, automationId);
+      } else if (campaignId !== null && campaignId !== undefined) {
+        // Only campaignId provided: match only campaign_id
+        whereClause = 'contact_id = $1 AND campaign_id = $2';
+        params.push(campaignId);
+      } else if (automationId !== null && automationId !== undefined) {
+        // Only automationId provided: match only automation_id
+        whereClause = 'contact_id = $1 AND automation_id = $2';
+        params.push(automationId);
+      } else {
+        // Both NULL: match both NULL
+        whereClause = 'contact_id = $1 AND campaign_id IS NULL AND automation_id IS NULL';
+      }
+      
       const existingRecord = await pool.query(
         `SELECT id FROM email_queue 
-         WHERE contact_id = $1 AND (campaign_id = $2 OR automation_id = $3)
+         WHERE ${whereClause}
          ORDER BY created_at DESC LIMIT 1`,
-        [contactId, campaignId, automationId]
+        params
       );
       if (existingRecord.rows.length > 0) {
         finalEmailQueueId = existingRecord.rows[0].id;
       } else {
-        // Create record if it doesn't exist (backward compatibility)
+        // Create record if it doesn't exist (Bug 1 fix: create BEFORE sending to ensure tracking)
         const newRecord = await pool.query(
           `INSERT INTO email_queue 
            (user_id, contact_id, campaign_id, automation_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
@@ -218,12 +272,42 @@ export async function processEmailQueue(job: Job) {
             content,
             fromEmail,
             fromName,
-            'sent',
+            'queued', // Will be updated to 'sent' after successful send
           ]
         );
         finalEmailQueueId = newRecord.rows[0].id;
       }
     }
+
+    // Add tracking to email content (now we're guaranteed to have finalEmailQueueId)
+    let trackedContent = content;
+    let trackingToken: string | null = null;
+
+    if (finalEmailQueueId) {
+      // Generate tracking token
+      trackingToken = generateTrackingToken(finalEmailQueueId, contactId);
+      
+      // Store tracking token
+      await storeTrackingToken(finalEmailQueueId, contactId, campaignId, trackingToken);
+      
+      // Add tracking pixel
+      const pixelUrl = getTrackingPixelUrl(trackingToken);
+      trackedContent = addTrackingPixel(trackedContent, pixelUrl);
+      
+      // Wrap links with tracking
+      trackedContent = wrapLinksWithTracking(trackedContent, trackingToken);
+    }
+
+    // Send email with tracked content
+    const result = await emailProvider.sendEmail({
+      to: toEmail,
+      subject,
+      htmlContent: trackedContent,
+      fromEmail,
+      fromName,
+    });
+
+    // Record success - finalEmailQueueId is guaranteed to exist at this point
 
     // Update the email_queue record
     await pool.query(
@@ -250,21 +334,51 @@ export async function processEmailQueue(job: Job) {
   } catch (error: any) {
     console.error('Email send error:', error);
 
-    // Record failure - use emailQueueId if available
-    if (emailQueueId) {
+    // Record failure - use finalEmailQueueId (Bug 2 fix: use finalEmailQueueId instead of emailQueueId)
+    if (finalEmailQueueId) {
       await pool.query(
         `UPDATE email_queue 
          SET status = 'failed', error_message = $1, retry_count = retry_count + 1
          WHERE id = $2`,
-        [error.message, emailQueueId]
+        [error.message, finalEmailQueueId]
       );
     } else {
-      // Fallback for backward compatibility
+      // Fallback for backward compatibility (should rarely happen now)
+      // Use subquery to find the most recent record first, then update by ID
+      // (PostgreSQL doesn't support ORDER BY/LIMIT in UPDATE statements)
+      // Handle NULL values correctly: only use IS NULL when BOTH are NULL
+      // Otherwise, only match the provided non-NULL value
+      let whereClause: string;
+      const params: any[] = [error.message, contactId];
+      let paramIndex = 3;
+      
+      if (campaignId !== null && campaignId !== undefined && automationId !== null && automationId !== undefined) {
+        // Both provided: match either
+        whereClause = `contact_id = $2 AND (campaign_id = $${paramIndex} OR automation_id = $${paramIndex + 1})`;
+        params.push(campaignId, automationId);
+      } else if (campaignId !== null && campaignId !== undefined) {
+        // Only campaignId provided: match only campaign_id
+        whereClause = `contact_id = $2 AND campaign_id = $${paramIndex}`;
+        params.push(campaignId);
+      } else if (automationId !== null && automationId !== undefined) {
+        // Only automationId provided: match only automation_id
+        whereClause = `contact_id = $2 AND automation_id = $${paramIndex}`;
+        params.push(automationId);
+      } else {
+        // Both NULL: match both NULL
+        whereClause = 'contact_id = $2 AND campaign_id IS NULL AND automation_id IS NULL';
+      }
+      
       await pool.query(
         `UPDATE email_queue 
          SET status = 'failed', error_message = $1, retry_count = retry_count + 1
-         WHERE contact_id = $2 AND (campaign_id = $3 OR automation_id = $4)`,
-        [error.message, contactId, campaignId, automationId]
+         WHERE id = (
+           SELECT id FROM email_queue
+           WHERE ${whereClause}
+           ORDER BY created_at DESC
+           LIMIT 1
+         )`,
+        params
       );
     }
 

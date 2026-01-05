@@ -21,6 +21,8 @@ import campaignRoutes from './routes/campaigns';
 import analyticsRoutes from './routes/analytics';
 import providerRoutes from './routes/providers';
 import complianceRoutes from './routes/compliance';
+import webhookRoutes from './routes/webhooks';
+import trackingRoutes from './routes/tracking';
 
 const app = express();
 const httpServer = createServer(app);
@@ -71,6 +73,8 @@ app.use('/api/campaigns', campaignRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/compliance', complianceRoutes);
+app.use('/api/webhooks', webhookRoutes);
+app.use('/api/tracking', trackingRoutes);
 
 // Serve frontend static files in production
 if (isProduction) {
