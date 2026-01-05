@@ -106,6 +106,7 @@ export async function processEmailQueue(job: Job) {
     contactId,
     campaignId,
     automationId,
+    emailQueueId, // May be provided if record was created upfront
     toEmail,
     subject,
     content,
@@ -139,11 +140,20 @@ export async function processEmailQueue(job: Job) {
     );
 
     if (suppressed.rows.length > 0) {
-      await pool.query(
-        `UPDATE email_queue SET status = 'failed', error_message = 'Contact suppressed' 
-         WHERE contact_id = $1 AND (campaign_id = $2 OR automation_id = $3)`,
-        [contactId, campaignId, automationId]
-      );
+      if (emailQueueId) {
+        await pool.query(
+          `UPDATE email_queue SET status = 'failed', error_message = 'Contact suppressed' 
+           WHERE id = $1`,
+          [emailQueueId]
+        );
+      } else {
+        // Fallback for backward compatibility
+        await pool.query(
+          `UPDATE email_queue SET status = 'failed', error_message = 'Contact suppressed' 
+           WHERE contact_id = $1 AND (campaign_id = $2 OR automation_id = $3)`,
+          [contactId, campaignId, automationId]
+        );
+      }
       return;
     }
 
@@ -179,22 +189,55 @@ export async function processEmailQueue(job: Job) {
       fromName,
     });
 
-    // Record success
+    // Record success - use emailQueueId if available, otherwise fallback to lookup
+    let finalEmailQueueId = emailQueueId;
+    if (!finalEmailQueueId) {
+      // Fallback: try to find existing record
+      const existingRecord = await pool.query(
+        `SELECT id FROM email_queue 
+         WHERE contact_id = $1 AND (campaign_id = $2 OR automation_id = $3)
+         ORDER BY created_at DESC LIMIT 1`,
+        [contactId, campaignId, automationId]
+      );
+      if (existingRecord.rows.length > 0) {
+        finalEmailQueueId = existingRecord.rows[0].id;
+      } else {
+        // Create record if it doesn't exist (backward compatibility)
+        const newRecord = await pool.query(
+          `INSERT INTO email_queue 
+           (user_id, contact_id, campaign_id, automation_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+           RETURNING id`,
+          [
+            userId,
+            contactId,
+            campaignId,
+            automationId,
+            toEmail,
+            subject,
+            content,
+            fromEmail,
+            fromName,
+            'sent',
+          ]
+        );
+        finalEmailQueueId = newRecord.rows[0].id;
+      }
+    }
+
+    // Update the email_queue record
     await pool.query(
       `UPDATE email_queue 
        SET status = 'sent', sent_at = CURRENT_TIMESTAMP, provider = $1
-       WHERE contact_id = $2 AND (campaign_id = $3 OR automation_id = $4)`,
-      [routingDecision.provider, contactId, campaignId, automationId]
+       WHERE id = $2`,
+      [routingDecision.provider, finalEmailQueueId]
     );
 
     // Record event
     await pool.query(
       `INSERT INTO email_events (email_queue_id, contact_id, campaign_id, event_type, provider_event_id)
-       SELECT id, $1, $2, 'sent', $3
-       FROM email_queue
-       WHERE contact_id = $1 AND (campaign_id = $2 OR automation_id = $4)
-       LIMIT 1`,
-      [contactId, campaignId, result.messageId, automationId]
+       VALUES ($1, $2, $3, 'sent', $4)`,
+      [finalEmailQueueId, contactId, campaignId, result.messageId]
     );
 
     // Record provider usage
@@ -207,13 +250,23 @@ export async function processEmailQueue(job: Job) {
   } catch (error: any) {
     console.error('Email send error:', error);
 
-    // Record failure
-    await pool.query(
-      `UPDATE email_queue 
-       SET status = 'failed', error_message = $1, retry_count = retry_count + 1
-       WHERE contact_id = $2 AND (campaign_id = $3 OR automation_id = $4)`,
-      [error.message, contactId, campaignId, automationId]
-    );
+    // Record failure - use emailQueueId if available
+    if (emailQueueId) {
+      await pool.query(
+        `UPDATE email_queue 
+         SET status = 'failed', error_message = $1, retry_count = retry_count + 1
+         WHERE id = $2`,
+        [error.message, emailQueueId]
+      );
+    } else {
+      // Fallback for backward compatibility
+      await pool.query(
+        `UPDATE email_queue 
+         SET status = 'failed', error_message = $1, retry_count = retry_count + 1
+         WHERE contact_id = $2 AND (campaign_id = $3 OR automation_id = $4)`,
+        [error.message, contactId, campaignId, automationId]
+      );
+    }
 
     // Record provider error (try to load providers if not already loaded)
     try {

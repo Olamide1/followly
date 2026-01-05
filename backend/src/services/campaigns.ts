@@ -431,11 +431,33 @@ export class CampaignService {
       const sendDelay = Math.floor(Math.random() * 3600); // Random delay up to 1 hour
       const scheduledAt = new Date(Date.now() + sendDelay * 1000);
 
-      // Add to queue
+      // Create email_queue record upfront for tracking
+      const emailQueueResult = await pool.query(
+        `INSERT INTO email_queue 
+         (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id`,
+        [
+          userId,
+          contact.id,
+          campaignId,
+          contact.email,
+          personalizedSubject,
+          personalizedContent,
+          fromEmail,
+          campaign.from_name || process.env.DEFAULT_FROM_NAME,
+          'queued',
+          scheduledAt,
+        ]
+      );
+      const emailQueueId = emailQueueResult.rows[0].id;
+
+      // Add to Bull queue with email_queue_id for reference
       await emailQueue.add({
         userId,
         contactId: contact.id,
         campaignId,
+        emailQueueId, // Include email_queue_id in job data
         toEmail: contact.email,
         subject: personalizedSubject,
         content: personalizedContent,
@@ -444,6 +466,7 @@ export class CampaignService {
         scheduledAt: scheduledAt.toISOString(),
       }, {
         delay: sendDelay * 1000,
+        jobId: `email-${emailQueueId}`, // Use email_queue_id as job ID for easy lookup
       });
     }
 
@@ -591,6 +614,159 @@ export class CampaignService {
       console.error('Failed to recover scheduled campaigns (queue may be unavailable):', error);
       return 0;
     }
+  }
+
+  /**
+   * Recovery function: Re-queue emails for campaigns that are marked as 'sent' 
+   * but have no email_queue records or have failed email_queue records
+   * This helps recover from worker failures
+   */
+  async recoverCampaignEmails(userId: number, campaignId: number): Promise<{ recovered: number; errors: string[] }> {
+    const campaign = await this.getCampaign(userId, campaignId);
+    const errors: string[] = [];
+
+    // Only recover campaigns that are marked as 'sent' or 'sending'
+    if (campaign.status !== 'sent' && campaign.status !== 'sending') {
+      throw createError('Campaign is not in a recoverable state. Only sent/sending campaigns can be recovered.', 400);
+    }
+
+    // Validate list_id
+    if (!campaign.list_id) {
+      throw createError('Campaign must have a list assigned', 400);
+    }
+
+    // Get all list contacts
+    const listService = new (await import('./lists')).ListService();
+    const listContacts = await listService.getAllListContacts(userId, campaign.list_id);
+
+    if (listContacts.length === 0) {
+      throw createError('No contacts in list', 400);
+    }
+
+    // Get existing email_queue records for this campaign
+    const existingRecords = await pool.query(
+      'SELECT contact_id, status FROM email_queue WHERE campaign_id = $1',
+      [campaignId]
+    );
+    
+    // Exclude contacts that have any non-failed status (pending, queued, sending, sent, bounced, complained)
+    // Only re-queue contacts with 'failed' status or no record at all
+    const nonFailedStatuses = ['pending', 'queued', 'sending', 'sent', 'bounced', 'complained'];
+    const existingContactIds = new Set(
+      existingRecords.rows
+        .filter((r: any) => nonFailedStatuses.includes(r.status)) // Exclude all non-failed statuses
+        .map((r: any) => r.contact_id)
+    );
+
+    // Get contacts that need to be re-queued (no record or only failed records)
+    const contactsToQueue = listContacts.filter(
+      (contact: any) => !existingContactIds.has(contact.id)
+    );
+
+    if (contactsToQueue.length === 0) {
+      return { recovered: 0, errors: [] };
+    }
+
+    const emailQueue = getEmailQueue();
+    const fromEmail = campaign.from_email || process.env.DEFAULT_FROM_EMAIL || '';
+    let recovered = 0;
+
+    for (const contact of contactsToQueue) {
+      try {
+        // Check suppression
+        const suppressed = await pool.query(
+          'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
+          [userId, contact.email]
+        );
+
+        if (suppressed.rows.length > 0) {
+          continue; // Skip suppressed contacts
+        }
+
+        // Personalize content
+        const personalizationData = {
+          name: contact.name || '',
+          company: contact.company || '',
+          email: contact.email,
+        };
+
+        const personalizedSubject = this.personalizationService.renderTemplate(
+          campaign.subject,
+          personalizationData
+        );
+        let personalizedContent = this.personalizationService.renderTemplate(
+          campaign.content,
+          personalizationData
+        );
+
+        // Append unsubscribe footer
+        const { appendUnsubscribeFooter } = await import('./unsubscribe');
+        personalizedContent = await appendUnsubscribeFooter(
+          userId,
+          contact.email,
+          personalizedContent,
+          {
+            includePreferences: true,
+            includeViewInBrowser: false,
+          }
+        );
+
+        // Schedule for immediate send (no delay for recovery)
+        const scheduledAt = new Date();
+
+        // Create email_queue record
+        const emailQueueResult = await pool.query(
+          `INSERT INTO email_queue 
+           (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           RETURNING id`,
+          [
+            userId,
+            contact.id,
+            campaignId,
+            contact.email,
+            personalizedSubject,
+            personalizedContent,
+            fromEmail,
+            campaign.from_name || process.env.DEFAULT_FROM_NAME,
+            'queued',
+            scheduledAt,
+          ]
+        );
+        const emailQueueId = emailQueueResult.rows[0].id;
+
+        // Add to Bull queue
+        await emailQueue.add({
+          userId,
+          contactId: contact.id,
+          campaignId,
+          emailQueueId,
+          toEmail: contact.email,
+          subject: personalizedSubject,
+          content: personalizedContent,
+          fromEmail,
+          fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
+          scheduledAt: scheduledAt.toISOString(),
+        }, {
+          jobId: `email-${emailQueueId}`,
+        });
+
+        recovered++;
+      } catch (error: any) {
+        errors.push(`Failed to recover email for ${contact.email}: ${error.message}`);
+        console.error(`Failed to recover email for contact ${contact.id}:`, error);
+      }
+    }
+
+    // Update campaign status back to 'sending' if it was 'sent' and we recovered some
+    if (recovered > 0 && campaign.status === 'sent') {
+      await pool.query(
+        'UPDATE campaigns SET status = $1 WHERE id = $2',
+        ['sending', campaignId]
+      );
+    }
+
+    return { recovered, errors };
   }
 }
 

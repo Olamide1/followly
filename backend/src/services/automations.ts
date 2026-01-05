@@ -390,19 +390,46 @@ export class AutomationService {
       }
     );
 
-    // Add to email queue
+    const scheduledAt = new Date();
+
+    // Create email_queue record upfront for tracking
+    const emailQueueResult = await pool.query(
+      `INSERT INTO email_queue 
+       (user_id, contact_id, automation_id, automation_step_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id`,
+      [
+        userId,
+        contactId,
+        automationId,
+        step.id,
+        contact.email,
+        subject,
+        content,
+        config.from_email || process.env.DEFAULT_FROM_EMAIL,
+        config.from_name || process.env.DEFAULT_FROM_NAME,
+        'queued',
+        scheduledAt,
+      ]
+    );
+    const emailQueueId = emailQueueResult.rows[0].id;
+
+    // Add to Bull queue
     const emailQueue = (await import('./queues')).getEmailQueue();
     await emailQueue.add({
       userId,
       contactId,
       automationId,
       automationStepId: step.id,
+      emailQueueId, // Include email_queue_id in job data
       toEmail: contact.email,
       subject,
       content,
       fromEmail: config.from_email || process.env.DEFAULT_FROM_EMAIL,
       fromName: config.from_name || process.env.DEFAULT_FROM_NAME,
-      scheduledAt: new Date().toISOString(),
+      scheduledAt: scheduledAt.toISOString(),
+    }, {
+      jobId: `email-${emailQueueId}`,
     });
   }
 

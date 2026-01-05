@@ -90,6 +90,16 @@ router.get('/:id/stats', async (req: AuthRequest, res: Response, next: NextFunct
   }
 });
 
+// Recover campaign emails (re-queue failed or missing emails)
+router.post('/:id/recover', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const result = await campaignService.recoverCampaignEmails(req.userId!, parseInt(req.params.id));
+    res.json(result);
+  } catch (error: any) {
+    next(error);
+  }
+});
+
 // Send test email
 router.post('/test-send', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
