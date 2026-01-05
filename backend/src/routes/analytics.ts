@@ -43,14 +43,17 @@ router.get('/dashboard', async (req: AuthRequest, res: Response, next: NextFunct
     );
     const sent = parseInt(emailQueueResult.rows[0]?.sent || '0');
 
+    // Improved query: join with email_queue to ensure we only count events for this user's emails
+    // This is more reliable than filtering by contact_id alone
     const emailStatsResult = await pool.query(
       `SELECT 
-        COUNT(*) FILTER (WHERE event_type = 'delivered') as delivered,
-        COUNT(*) FILTER (WHERE event_type = 'opened') as opened,
-        COUNT(*) FILTER (WHERE event_type = 'clicked') as clicked
-       FROM email_events
-       WHERE contact_id IN (SELECT id FROM contacts WHERE user_id = $1)
-       AND occurred_at >= NOW() - INTERVAL '30 days'`,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'delivered' THEN e.id END) as delivered,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'opened' THEN e.id END) as opened,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'clicked' THEN e.id END) as clicked
+       FROM email_events e
+       INNER JOIN email_queue eq ON e.email_queue_id = eq.id
+       WHERE eq.user_id = $1
+       AND e.occurred_at >= NOW() - INTERVAL '30 days'`,
       [userId]
     );
 

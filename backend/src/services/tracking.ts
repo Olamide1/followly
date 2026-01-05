@@ -10,10 +10,22 @@ export function generateTrackingToken(emailQueueId: number, contactId: number): 
 }
 
 /**
+ * Get the base URL for tracking endpoints (backend API URL)
+ */
+function getTrackingBaseUrl(): string {
+  // In production, use the Heroku app URL or APP_URL env var
+  if (process.env.NODE_ENV === 'production') {
+    return process.env.APP_URL || process.env.HEROKU_APP_URL || 'https://followly-1a83c23a0be1.herokuapp.com';
+  }
+  // In development, use localhost
+  return process.env.APP_URL || 'http://localhost:3000';
+}
+
+/**
  * Generate tracking pixel URL
  */
 export function getTrackingPixelUrl(token: string): string {
-  const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+  const baseUrl = getTrackingBaseUrl();
   return `${baseUrl}/api/tracking/pixel/${token}`;
 }
 
@@ -21,7 +33,7 @@ export function getTrackingPixelUrl(token: string): string {
  * Generate click tracking URL
  */
 export function getClickTrackingUrl(token: string, originalUrl: string): string {
-  const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+  const baseUrl = getTrackingBaseUrl();
   const encodedUrl = encodeURIComponent(originalUrl);
   return `${baseUrl}/api/tracking/click/${token}?url=${encodedUrl}`;
 }
@@ -187,8 +199,12 @@ export function wrapLinksWithTracking(htmlContent: string, token: string): strin
     // Convert relative URLs to absolute if needed
     let absoluteUrl = url;
     if (url.startsWith('/')) {
-      const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-      absoluteUrl = `${baseUrl}${url}`;
+      // For relative URLs starting with /, we need to determine the appropriate base URL
+      // This should typically be the frontend URL, not the backend API URL
+      // If it's a relative URL in an email, it's likely meant to be relative to the email domain
+      // For now, we'll skip tracking these as they're ambiguous
+      // Most email links should be absolute URLs anyway
+      return match;
     } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
       // Relative URL without leading slash - keep as is (will be relative to email domain)
       return match;
