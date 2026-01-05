@@ -134,6 +134,7 @@ export class CampaignService {
   async listCampaigns(userId: number, options: {
     type?: 'broadcast' | 'lifecycle';
     status?: string;
+    search?: string;
     page?: number;
     limit?: number;
   } = {}) {
@@ -155,6 +156,12 @@ export class CampaignService {
       paramCount++;
       query += ` AND status = $${paramCount}`;
       params.push(options.status);
+    }
+
+    if (options.search) {
+      paramCount++;
+      query += ` AND (name ILIKE $${paramCount} OR subject ILIKE $${paramCount})`;
+      params.push(`%${options.search}%`);
     }
 
     query += ` ORDER BY created_at DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
@@ -495,27 +502,33 @@ export class CampaignService {
     const sent = parseInt(stats.sent) || 0;
     const delivered = parseInt(stats.delivered) || 0;
 
-    // Get opens and clicks from events
+    // Get opens and clicks from events - count distinct emails, not total events
     const eventsResult = await pool.query(
       `SELECT 
-        COUNT(*) FILTER (WHERE event_type = 'opened') as opens,
-        COUNT(*) FILTER (WHERE event_type = 'clicked') as clicks
+        COUNT(DISTINCT CASE WHEN event_type = 'opened' THEN email_queue_id END) as opens,
+        COUNT(DISTINCT CASE WHEN event_type = 'clicked' THEN email_queue_id END) as clicks
        FROM email_events
        WHERE campaign_id = $1`,
       [campaignId]
     );
 
     const events = eventsResult.rows[0];
+    const opens = parseInt(events.opens) || 0;
+    const clicks = parseInt(events.clicks) || 0;
+
+    // Calculate rates
+    const openRate = sent > 0 ? ((opens / sent) * 100).toFixed(2) : '0.00';
+    const clickRate = sent > 0 ? ((clicks / sent) * 100).toFixed(2) : '0.00';
 
     return {
       sent,
       delivered,
       bounced: parseInt(stats.bounced) || 0,
       complained: parseInt(stats.complained) || 0,
-      opens: parseInt(events.opens) || 0,
-      clicks: parseInt(events.clicks) || 0,
-      openRate: sent > 0 ? ((parseInt(events.opens) || 0) / sent * 100).toFixed(2) : '0.00',
-      clickRate: sent > 0 ? ((parseInt(events.clicks) || 0) / sent * 100).toFixed(2) : '0.00',
+      opens,
+      clicks,
+      openRate,
+      clickRate,
       deliveryRate: sent > 0 ? (delivered / sent * 100).toFixed(2) : '0.00',
     };
   }

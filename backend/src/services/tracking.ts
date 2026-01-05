@@ -2,6 +2,28 @@ import crypto from 'crypto';
 import { pool } from '../database/connection';
 
 /**
+ * Sanitize URL for logging - removes query parameters and sensitive data
+ * Returns only protocol, domain, and path for security
+ */
+function sanitizeUrlForLogging(url: string | null | undefined): string {
+  if (!url) return '[no url]';
+  
+  try {
+    const urlObj = new URL(url);
+    // Return only protocol, hostname, and pathname (no query params, no hash)
+    return `${urlObj.protocol}//${urlObj.hostname}${urlObj.pathname}`;
+  } catch {
+    // If URL parsing fails, return a hash of the URL instead
+    try {
+      const hash = crypto.createHash('sha256').update(url).digest('hex').substring(0, 8);
+      return `[url:${hash}]`;
+    } catch {
+      return '[invalid url]';
+    }
+  }
+}
+
+/**
  * Generate a unique tracking token for an email
  */
 export function generateTrackingToken(emailQueueId: number, contactId: number): string {
@@ -116,6 +138,7 @@ export async function recordOpenEvent(
     [emailQueueId, contactId, campaignId, source]
   );
 
+  console.log(`[Tracking] Successfully inserted open event for emailQueueId: ${emailQueueId}, source: ${source}`);
   return true; // New event recorded
 }
 
@@ -158,6 +181,7 @@ export async function recordClickEvent(
     [emailQueueId, contactId, campaignId, source, url]
   );
 
+  console.log(`[Tracking] Successfully inserted click event for emailQueueId: ${emailQueueId}, source: ${source}, url: ${sanitizeUrlForLogging(url)}`);
   return true; // New event recorded
 }
 

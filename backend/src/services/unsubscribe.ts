@@ -10,10 +10,22 @@ export function generateUnsubscribeToken(userId: number, email: string): string 
 }
 
 /**
+ * Get the base URL for frontend (unsubscribe/preferences pages)
+ */
+function getFrontendBaseUrl(): string {
+  // In production, use the Heroku app URL or FRONTEND_URL env var
+  if (process.env.NODE_ENV === 'production') {
+    return process.env.FRONTEND_URL || process.env.APP_URL || 'https://followly-1a83c23a0be1.herokuapp.com';
+  }
+  // In development, use localhost
+  return process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:5173';
+}
+
+/**
  * Generate unsubscribe URL
  */
 export function getUnsubscribeUrl(email: string, token?: string): string {
-  const baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:5173';
+  const baseUrl = getFrontendBaseUrl();
   if (token) {
     return `${baseUrl}/unsubscribe?email=${encodeURIComponent(email)}&token=${token}`;
   }

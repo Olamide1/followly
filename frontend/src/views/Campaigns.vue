@@ -1,13 +1,53 @@
 <template>
   <div>
-    <div class="page-header flex justify-between items-center">
-      <div>
-        <h1 class="page-title">Campaigns</h1>
-        <p class="page-description">Manage your email campaigns</p>
+    <div class="page-header">
+      <div class="flex justify-between items-center mb-6">
+        <div>
+          <h1 class="page-title">Campaigns</h1>
+          <p class="page-description">Manage your email campaigns</p>
+        </div>
+        <router-link to="/app/campaigns/new" class="btn btn-primary">
+          Create Campaign
+        </router-link>
       </div>
-      <router-link to="/app/campaigns/new" class="btn btn-primary">
-        Create Campaign
-      </router-link>
+      
+      <!-- Filters -->
+      <div class="flex flex-wrap gap-4 items-end">
+        <div class="flex-1 min-w-[200px]">
+          <input
+            v-model="searchQuery"
+            @input="debouncedLoadCampaigns"
+            type="text"
+            placeholder="Search campaigns..."
+            class="input w-full"
+          />
+        </div>
+        <div>
+          <select v-model="statusFilter" @change="loadCampaigns" class="input">
+            <option value="">All Statuses</option>
+            <option value="draft">Draft</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="sending">Sending</option>
+            <option value="sent">Sent</option>
+            <option value="paused">Paused</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div>
+          <select v-model="typeFilter" @change="loadCampaigns" class="input">
+            <option value="">All Types</option>
+            <option value="broadcast">Broadcast</option>
+            <option value="lifecycle">Lifecycle</option>
+          </select>
+        </div>
+        <button
+          v-if="searchQuery || statusFilter || typeFilter"
+          @click="clearFilters"
+          class="btn btn-ghost text-xs"
+        >
+          Clear Filters
+        </button>
+      </div>
     </div>
 
     <div v-if="loading" class="text-center py-24">
@@ -181,6 +221,10 @@ const scheduleTime = ref('')
 const scheduleError = ref('')
 const scheduling = ref(false)
 const selectedCampaign = ref<any>(null)
+const searchQuery = ref('')
+const statusFilter = ref('')
+const typeFilter = ref('')
+let searchTimeout: ReturnType<typeof setTimeout> | null = null
 
 // Get user's timezone
 const userTimezone = computed(() => {
@@ -230,13 +274,34 @@ function formatScheduledTime(isoString: string): string {
 async function loadCampaigns() {
   loading.value = true
   try {
-    const response = await api.get('/campaigns')
+    const params: any = {}
+    if (searchQuery.value) params.search = searchQuery.value
+    if (statusFilter.value) params.status = statusFilter.value
+    if (typeFilter.value) params.type = typeFilter.value
+    
+    const response = await api.get('/campaigns', { params })
     campaigns.value = response.data.campaigns
   } catch (error) {
     console.error('Failed to load campaigns:', error)
   } finally {
     loading.value = false
   }
+}
+
+function debouncedLoadCampaigns() {
+  if (searchTimeout) {
+    clearTimeout(searchTimeout)
+  }
+  searchTimeout = setTimeout(() => {
+    loadCampaigns()
+  }, 300)
+}
+
+function clearFilters() {
+  searchQuery.value = ''
+  statusFilter.value = ''
+  typeFilter.value = ''
+  loadCampaigns()
 }
 
 async function sendCampaign(id: number) {

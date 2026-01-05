@@ -41,6 +41,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
     const result = await campaignService.listCampaigns(req.userId!, {
       type: req.query.type as 'broadcast' | 'lifecycle',
       status: req.query.status as string,
+      search: req.query.search as string,
       page: parseInt(req.query.page as string) || 1,
       limit: parseInt(req.query.limit as string) || 50,
     });
