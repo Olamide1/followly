@@ -58,13 +58,14 @@ router.get('/pixel/:token', async (req: Request, res: Response) => {
  * Click tracking endpoint
  * Redirects to original URL and records the click event
  */
-router.get('/click/:token', async (req: Request, res: Response) => {
+router.get('/click/:token', async (req: Request, res: Response): Promise<void> => {
   try {
     const { token } = req.params;
     const { url } = req.query;
 
     if (!url || typeof url !== 'string') {
-      return res.status(400).send('Missing URL parameter');
+      res.status(400).send('Missing URL parameter');
+      return;
     }
 
     // Decode the original URL
@@ -86,6 +87,7 @@ router.get('/click/:token', async (req: Request, res: Response) => {
 
     // Redirect to original URL
     res.redirect(originalUrl);
+    return;
   } catch (error: any) {
     console.error('Click tracking error:', error);
     // Try to redirect anyway if URL is available
@@ -93,8 +95,10 @@ router.get('/click/:token', async (req: Request, res: Response) => {
     if (url && typeof url === 'string') {
       try {
         res.redirect(decodeURIComponent(url));
+        return;
       } catch {
         res.status(500).send('Tracking error');
+        return;
       }
     } else {
       res.status(500).send('Tracking error');
