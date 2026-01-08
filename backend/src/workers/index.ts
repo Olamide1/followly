@@ -1,80 +1,12 @@
 import dotenv from 'dotenv';
 dotenv.config(); // Must be first, before any other imports that use env vars
 
-import Bull from 'bull';
 import { processEmailQueue } from './emailWorker';
-import { processAutomationQueue } from './automationWorker';
+// import { processAutomationQueue } from './automationWorker'; // DISABLED: Temporarily commented out
 import { processSchedulingQueue } from './schedulingWorker';
 import { initializeRedis } from '../services/redis';
 import { initializeDatabase } from '../database/connection';
-
-// Parse Redis URL and configure for Heroku TLS
-function getRedisConfig() {
-  const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-  const isProduction = process.env.NODE_ENV === 'production';
-  
-  // If using rediss:// (TLS) or in production, configure TLS
-  if (redisUrl.startsWith('rediss://') || (isProduction && redisUrl.startsWith('redis://'))) {
-    // Normalize rediss:// to redis:// for URL parsing, then configure TLS
-    const normalizedUrl = redisUrl.replace('rediss://', 'redis://');
-    const url = new URL(normalizedUrl);
-    const password = url.password || undefined;
-    const host = url.hostname;
-    const port = parseInt(url.port || '6379');
-    
-    return {
-      host,
-      port,
-      password,
-      tls: {
-        rejectUnauthorized: false, // Required for Heroku Redis self-signed certs
-      },
-      // Note: Bull doesn't allow enableReadyCheck or maxRetriesPerRequest
-      // These are handled internally by Bull
-      retryStrategy: (times: number) => {
-        // Exponential backoff with max delay
-        const delay = Math.min(times * 50, 2000);
-        return delay;
-      },
-      enableOfflineQueue: true, // Queue commands while reconnecting
-    };
-  }
-  
-  // For local development without TLS
-  return redisUrl;
-}
-
-const redisConfig = getRedisConfig();
-
-// Create queues
-const emailQueue = new Bull('email', { redis: redisConfig });
-const automationQueue = new Bull('automation', { redis: redisConfig });
-const schedulingQueue = new Bull('scheduling', { redis: redisConfig });
-
-// Error handling
-emailQueue.on('error', (err) => {
-  console.error('Email queue error:', err.message);
-});
-
-automationQueue.on('error', (err) => {
-  console.error('Automation queue error:', err.message);
-});
-
-schedulingQueue.on('error', (err) => {
-  console.error('Scheduling queue error:', err.message);
-});
-
-emailQueue.on('failed', (job, err) => {
-  console.error(`Email job ${job.id} failed:`, err.message);
-});
-
-automationQueue.on('failed', (job, err) => {
-  console.error(`Automation job ${job.id} failed:`, err.message);
-});
-
-schedulingQueue.on('failed', (job, err) => {
-  console.error(`Scheduling job ${job.id} failed:`, err.message);
-});
+import { initializeQueues, getEmailQueue, getSchedulingQueue } from '../services/queues';
 
 // Wait for Redis connection before starting processors
 async function startWorkers() {
@@ -83,25 +15,27 @@ async function startWorkers() {
     await initializeDatabase();
     await initializeRedis();
     
-    // Wait for Bull queues to be ready
-    await Promise.all([
-      emailQueue.isReady(),
-      automationQueue.isReady(),
-      schedulingQueue.isReady(),
-    ]);
+    // Initialize queues with shared Redis config (this reuses the same config as web dyno)
+    // Note: initializeQueues() only creates queues, it does NOT register processors
+    // Processors are registered below to ensure jobs are only processed once
+    await initializeQueues();
 
-    console.log('✅ Redis connection ready');
+    // Get queue instances (these use the shared Redis config)
+    const emailQueue = getEmailQueue();
+    const schedulingQueue = getSchedulingQueue();
 
-    // Register processors
+    // Register processors on the shared queue instances
     emailQueue.process(async (job) => {
       console.log(`Processing email job ${job.id}`);
       return processEmailQueue(job);
     });
 
-    automationQueue.process(async (job) => {
-      console.log(`Processing automation job ${job.id}`);
-      return processAutomationQueue(job);
-    });
+    // Note: Automation queue is currently disabled
+    // const automationQueue = getAutomationQueue();
+    // automationQueue.process(async (job) => {
+    //   console.log(`Processing automation job ${job.id}`);
+    //   return processAutomationQueue(job);
+    // });
 
     schedulingQueue.process(async (job) => {
       console.log(`Processing scheduling job ${job.id}`);

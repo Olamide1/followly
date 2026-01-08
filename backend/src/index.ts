@@ -102,6 +102,7 @@ async function startServer() {
   try {
     await initializeDatabase();
     await initializeRedis();
+    // Initialize queues (worker dyno handles job processing)
     await initializeQueues();
     
     // Start server immediately - don't block on recovery

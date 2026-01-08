@@ -104,7 +104,38 @@ router.post('/:id/contacts/bulk', async (req: AuthRequest, res: Response, next: 
   }
 });
 
-// Add contact to list (MUST come after /bulk route)
+// Preview list contacts with rules (without saving) - MUST come before /:id/contacts/:contactId
+router.post('/:id/contacts/preview', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const listId = parseInt(req.params.id, 10);
+    
+    if (isNaN(listId) || listId <= 0) {
+      throw createError('Invalid list ID', 400);
+    }
+
+    const { rules, limit } = req.body;
+    
+    if (!rules) {
+      throw createError('Rules are required for preview', 400);
+    }
+
+    const service = new ListService();
+    const result = await service.previewListContacts(
+      req.userId!,
+      listId,
+      rules,
+      {
+        page: 1,
+        limit: limit || 50,
+      }
+    );
+    res.json(result);
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Add contact to list (MUST come after /bulk and /preview routes)
 router.post('/:id/contacts/:contactId', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const listId = parseInt(req.params.id, 10);

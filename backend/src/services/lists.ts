@@ -367,6 +367,55 @@ export class ListService {
     return result.rows;
   }
 
+  // Preview contacts matching rules without saving (for smart list preview)
+  async previewListContacts(userId: number, listId: number, rules: SmartListRules, options: {
+    page?: number;
+    limit?: number;
+  } = {}) {
+    // Verify ownership (but don't require list to be smart type - allows previewing rules)
+    const listResult = await pool.query(
+      'SELECT id FROM lists WHERE id = $1 AND user_id = $2',
+      [listId, userId]
+    );
+
+    if (listResult.rows.length === 0) {
+      throw createError('List not found', 404);
+    }
+
+    // Evaluate rules without saving
+    const contacts = await this.evaluateSmartList(userId, rules);
+    const contactIds = contacts.map((c: any) => c.id);
+
+    if (contactIds.length === 0) {
+      return {
+        contacts: [],
+        pagination: { page: 1, limit: options.limit || 50, total: 0, totalPages: 0 },
+      };
+    }
+
+    const page = options.page || 1;
+    const limit = options.limit || 50;
+    const offset = (page - 1) * limit;
+
+    const result = await pool.query(
+      `SELECT * FROM contacts 
+       WHERE id = ANY($1) AND user_id = $2
+       ORDER BY created_at DESC
+       LIMIT $3 OFFSET $4`,
+      [contactIds, userId, limit, offset]
+    );
+
+    return {
+      contacts: result.rows,
+      pagination: {
+        page,
+        limit,
+        total: contactIds.length,
+        totalPages: Math.ceil(contactIds.length / limit),
+      },
+    };
+  }
+
   private async evaluateSmartList(userId: number, rules: SmartListRules): Promise<any[]> {
     if (!rules || !rules.rules || rules.rules.length === 0) {
       return [];

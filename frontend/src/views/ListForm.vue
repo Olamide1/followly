@@ -30,10 +30,169 @@
           <textarea id="description" v-model="form.description" rows="3" class="input" />
         </div>
 
-        <div v-if="form.type === 'smart'" class="border-l-2 border-ink-900 pl-4 py-3">
-          <p class="text-sm text-ink-600">
-            Smart lists are automatically updated based on rules. Rules configuration coming soon.
-          </p>
+        <!-- Smart List Rules Builder -->
+        <div v-if="form.type === 'smart'" class="space-y-4">
+          <div>
+            <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+              Rules *
+            </label>
+            <p class="text-xs text-ink-600 mb-4">
+              Define rules to automatically include contacts in this list. Contacts matching all rules (AND) or any rule (OR) will be included.
+            </p>
+            
+            <!-- Logic Operator -->
+            <div v-if="smartListRules.rules.length > 1" class="mb-4">
+              <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                Match Logic
+              </label>
+              <div class="flex space-x-4">
+                <label class="flex items-center">
+                  <input
+                    type="radio"
+                    v-model="smartListRules.operator"
+                    value="AND"
+                    class="mr-2"
+                  />
+                  <span class="text-sm text-ink-700">Match ALL rules (AND)</span>
+                </label>
+                <label class="flex items-center">
+                  <input
+                    type="radio"
+                    v-model="smartListRules.operator"
+                    value="OR"
+                    class="mr-2"
+                  />
+                  <span class="text-sm text-ink-700">Match ANY rule (OR)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Rules List -->
+            <div class="space-y-3">
+              <div
+                v-for="(rule, index) in smartListRules.rules"
+                :key="index"
+                class="border-l-2 border-grid-medium pl-4 py-3 bg-paper"
+              >
+                <div class="flex items-start justify-between mb-3">
+                  <span class="text-xs text-ink-500 uppercase tracking-wider">Rule {{ index + 1 }}</span>
+                  <button
+                    type="button"
+                    @click="removeRule(index)"
+                    class="text-xs text-ink-500 hover:text-ink-700 uppercase tracking-wider transition-colors"
+                  >
+                    Remove
+                  </button>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <!-- Field -->
+                  <div>
+                    <label class="block text-xs text-ink-600 mb-1">Field</label>
+                    <select
+                      v-model="rule.field"
+                      class="input text-sm"
+                      @change="updateRuleValueType(index)"
+                    >
+                      <option value="email">Email</option>
+                      <option value="name">Name</option>
+                      <option value="company">Company</option>
+                      <option value="role">Role</option>
+                      <option value="country">Country</option>
+                      <option value="subscription_status">Subscription Status</option>
+                      <option value="tag">Tag</option>
+                      <option value="signup_date">Signup Date</option>
+                    </select>
+                  </div>
+                  
+                  <!-- Operator -->
+                  <div>
+                    <label class="block text-xs text-ink-600 mb-1">Operator</label>
+                    <select
+                      v-model="rule.operator"
+                      class="input text-sm"
+                    >
+                      <option
+                        v-for="op in getOperatorsForField(rule.field)"
+                        :key="op.value"
+                        :value="op.value"
+                      >
+                        {{ op.label }}
+                      </option>
+                    </select>
+                  </div>
+                  
+                  <!-- Value -->
+                  <div>
+                    <label class="block text-xs text-ink-600 mb-1">Value</label>
+                    <input
+                      v-if="rule.field !== 'subscription_status' && rule.field !== 'signup_date'"
+                      v-model="rule.value"
+                      type="text"
+                      :placeholder="getValuePlaceholder(rule.field)"
+                      class="input text-sm"
+                    />
+                    <select
+                      v-else-if="rule.field === 'subscription_status'"
+                      v-model="rule.value"
+                      class="input text-sm"
+                    >
+                      <option value="subscribed">Subscribed</option>
+                      <option value="unsubscribed">Unsubscribed</option>
+                    </select>
+                    <input
+                      v-else-if="rule.field === 'signup_date'"
+                      v-model="rule.value"
+                      type="date"
+                      class="input text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Add Rule Button -->
+            <button
+              type="button"
+              @click="addRule"
+              class="btn text-xs mt-4"
+            >
+              + Add Rule
+            </button>
+
+            <!-- Preview Section -->
+            <div v-if="smartListRules.rules.length > 0" class="mt-6 border-t border-grid-medium pt-4">
+              <div class="flex items-center justify-between mb-3">
+                <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider">
+                  Preview
+                </label>
+                <button
+                  type="button"
+                  @click="previewContacts"
+                  :disabled="loadingPreview"
+                  class="text-xs text-ink-600 hover:text-ink-900 uppercase tracking-wider transition-colors"
+                >
+                  {{ loadingPreview ? 'Loading...' : 'Refresh Preview' }}
+                </button>
+              </div>
+              <div v-if="previewContactsList.length > 0" class="max-h-48 overflow-y-auto space-y-2">
+                <div
+                  v-for="contact in previewContactsList"
+                  :key="contact.id"
+                  class="border-l-2 border-grid-light pl-3 py-2 text-sm"
+                >
+                  <p class="text-ink-900">{{ contact.email }}</p>
+                  <p v-if="contact.name" class="text-xs text-ink-600">{{ contact.name }}</p>
+                </div>
+              </div>
+              <div v-else-if="!loadingPreview" class="text-sm text-ink-600">
+                No contacts match these rules yet.
+              </div>
+              <div v-if="previewContactsList.length > 0" class="mt-2 text-xs text-ink-600">
+                Showing {{ previewContactsList.length }} matching contact{{ previewContactsList.length !== 1 ? 's' : '' }}
+              </div>
+            </div>
+          </div>
         </div>
 
         <div v-if="error" class="text-red-600 text-sm">
@@ -153,7 +312,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/services/api'
 
@@ -164,12 +323,47 @@ const isEdit = computed(() => !!route.params.id)
 const loading = ref(false)
 const error = ref('')
 
-const form = ref({
+const form = ref<{
+  name: string
+  type: 'static' | 'smart'
+  description: string
+  rules: {
+    operator: 'AND' | 'OR'
+    rules: Array<{
+      field: string
+      operator: string
+      value: any
+    }>
+  } | null | string
+}>({
   name: '',
   type: 'static',
   description: '',
   rules: null,
 })
+
+// Smart list rules state
+const smartListRules = ref({
+  operator: 'AND' as 'AND' | 'OR',
+  rules: [] as Array<{
+    field: string
+    operator: string
+    value: any
+  }>,
+})
+
+const previewContactsList = ref<any[]>([])
+const loadingPreview = ref(false)
+const previewTimeoutId = ref<ReturnType<typeof setTimeout> | null>(null)
+// Store original smart list rules when switching to static, so we can restore them
+const savedSmartListRules = ref<{
+  operator: 'AND' | 'OR'
+  rules: Array<{
+    field: string
+    operator: string
+    value: any
+  }>
+} | null>(null)
 
 const listContacts = ref<any[]>([])
 const loadingContacts = ref(false)
@@ -184,12 +378,72 @@ onMounted(async () => {
     try {
       const response = await api.get(`/lists/${route.params.id}`)
       Object.assign(form.value, response.data.list)
+      
+      // Initialize smart list rules if they exist
+      if (form.value.type === 'smart' && form.value.rules) {
+        // Parse rules if they come as a JSON string
+        let parsedRules: any = form.value.rules
+        if (typeof form.value.rules === 'string') {
+          try {
+            parsedRules = JSON.parse(form.value.rules)
+          } catch (e) {
+            console.error('Failed to parse rules:', e)
+            parsedRules = null
+          }
+        }
+        
+        if (parsedRules && parsedRules.rules) {
+          smartListRules.value = {
+            operator: parsedRules.operator || 'AND',
+            rules: parsedRules.rules || [],
+          }
+          // Save original rules for restoration if user switches away and back
+          savedSmartListRules.value = {
+            operator: parsedRules.operator || 'AND',
+            rules: JSON.parse(JSON.stringify(parsedRules.rules)), // Deep copy
+          }
+          // Load preview after a short delay
+          previewTimeoutId.value = setTimeout(() => {
+            if (smartListRules.value.rules.length > 0) {
+              previewContacts()
+            }
+            previewTimeoutId.value = null
+          }, 500)
+        } else {
+          // Initialize empty rules if parsing failed or no rules
+          smartListRules.value = {
+            operator: 'AND',
+            rules: [],
+          }
+        }
+      } else if (form.value.type === 'smart') {
+        // Initialize empty rules for new smart lists
+        smartListRules.value = {
+          operator: 'AND',
+          rules: [],
+        }
+      }
+      
       if (form.value.type === 'static') {
         loadListContacts()
       }
     } catch (err) {
       console.error('Failed to load list:', err)
     }
+  } else {
+    // Initialize empty rules for new smart lists
+    smartListRules.value = {
+      operator: 'AND',
+      rules: [],
+    }
+  }
+})
+
+onBeforeUnmount(() => {
+  // Clean up preview timeout if component is unmounted before it fires
+  if (previewTimeoutId.value !== null) {
+    clearTimeout(previewTimeoutId.value)
+    previewTimeoutId.value = null
   }
 })
 
@@ -277,10 +531,144 @@ async function removeContact(contactId: number) {
 
 function onTypeChange() {
   if (form.value.type === 'static') {
+    // Don't overwrite savedSmartListRules - preserve original saved rules
+    // User's unsaved modifications will be lost if they switch away, which is expected
     form.value.rules = null
+    smartListRules.value = { operator: 'AND', rules: [] }
+    previewContactsList.value = []
     if (isEdit.value) {
       loadListContacts()
     }
+  } else if (form.value.type === 'smart') {
+    // Restore original saved rules if they exist, otherwise initialize empty rules
+    if (savedSmartListRules.value && savedSmartListRules.value.rules.length > 0) {
+      smartListRules.value = {
+        operator: savedSmartListRules.value.operator,
+        rules: JSON.parse(JSON.stringify(savedSmartListRules.value.rules)), // Deep copy
+      }
+      // Restore rules in form for saving
+      form.value.rules = {
+        operator: savedSmartListRules.value.operator,
+        rules: savedSmartListRules.value.rules,
+      }
+    } else if (smartListRules.value.rules.length === 0) {
+      // If no saved rules and current rules are empty, initialize empty rules
+      smartListRules.value = { operator: 'AND', rules: [] }
+    }
+  }
+}
+
+// Rule builder functions
+function addRule() {
+  smartListRules.value.rules.push({
+    field: 'email',
+    operator: 'contains',
+    value: '',
+  })
+}
+
+function removeRule(index: number) {
+  smartListRules.value.rules.splice(index, 1)
+  // Refresh preview after removing rule
+  if (smartListRules.value.rules.length > 0) {
+    previewContacts()
+  } else {
+    previewContactsList.value = []
+  }
+}
+
+function updateRuleValueType(index: number) {
+  const rule = smartListRules.value.rules[index]
+  // Reset value when field changes
+  rule.value = ''
+  // Set default operator based on field
+  if (rule.field === 'subscription_status') {
+    rule.operator = 'equals'
+  } else if (rule.field === 'signup_date') {
+    rule.operator = 'greater_than'
+  } else if (rule.field === 'tag') {
+    rule.operator = 'equals'
+  } else {
+    rule.operator = 'contains'
+  }
+}
+
+function getOperatorsForField(field: string) {
+  if (field === 'subscription_status') {
+    return [{ value: 'equals', label: 'Is' }]
+  }
+  if (field === 'signup_date') {
+    return [
+      { value: 'greater_than', label: 'After' },
+      { value: 'less_than', label: 'Before' },
+    ]
+  }
+  if (field === 'tag') {
+    // Backend only supports tag matching (like equals), so only show one option
+    return [{ value: 'equals', label: 'Has Tag' }]
+  }
+  return [
+    { value: 'equals', label: 'Equals' },
+    { value: 'contains', label: 'Contains' },
+    { value: 'not_equals', label: 'Not Equals' },
+    { value: 'not_contains', label: 'Not Contains' },
+  ]
+}
+
+function getValuePlaceholder(field: string) {
+  const placeholders: Record<string, string> = {
+    email: 'e.g., @gmail.com',
+    name: 'e.g., John',
+    company: 'e.g., Acme Inc',
+    role: 'e.g., CEO',
+    country: 'e.g., United States',
+    tag: 'e.g., VIP',
+  }
+  return placeholders[field] || 'Enter value'
+}
+
+async function previewContacts() {
+  if (smartListRules.value.rules.length === 0) {
+    previewContactsList.value = []
+    return
+  }
+
+  // Validate all rules have values
+  const invalidRules = smartListRules.value.rules.filter(r => {
+    if (!r.value) return true
+    if (typeof r.value === 'string' && r.value.trim() === '') return true
+    return false
+  })
+  if (invalidRules.length > 0) {
+    alert('Please fill in all rule values before previewing')
+    return
+  }
+
+  // For new lists, we need to save first to preview (need a list ID)
+  if (!isEdit.value) {
+    alert('Please save the list first to preview matching contacts')
+    return
+  }
+
+  loadingPreview.value = true
+  try {
+    // Use preview endpoint - this evaluates rules without saving them
+    const testRules = {
+      operator: smartListRules.value.operator,
+      rules: smartListRules.value.rules,
+    }
+    
+    const response = await api.post(`/lists/${route.params.id}/contacts/preview`, {
+      rules: testRules,
+      limit: 50, // Limit preview to 50 contacts
+    })
+    previewContactsList.value = response.data.contacts || []
+  } catch (err: any) {
+    console.error('Failed to preview contacts:', err)
+    alert(err.response?.data?.error || 'Failed to preview contacts. Make sure all rules are valid.')
+    previewContactsList.value = []
+  } finally {
+    loadingPreview.value = false
   }
 }
 
@@ -289,12 +677,37 @@ async function handleSubmit() {
   error.value = ''
 
   try {
+    // Validate smart list rules
+    if (form.value.type === 'smart') {
+      if (smartListRules.value.rules.length === 0) {
+        error.value = 'Smart lists require at least one rule'
+        loading.value = false
+        return
+      }
+      
+      // Validate all rules have values
+      const invalidRules = smartListRules.value.rules.filter(r => !r.value || (typeof r.value === 'string' && r.value.trim() === ''))
+      if (invalidRules.length > 0) {
+        error.value = 'All rules must have a value'
+        loading.value = false
+        return
+      }
+      
+      // Set rules in form
+      form.value.rules = {
+        operator: smartListRules.value.operator,
+        rules: smartListRules.value.rules,
+      }
+    } else {
+      form.value.rules = null
+    }
+
     if (isEdit.value) {
       await api.put(`/lists/${route.params.id}`, form.value)
       router.push('/app/lists')
     } else {
       const response = await api.post('/lists', form.value)
-      // After creating, navigate to edit page so user can add contacts
+      // After creating, navigate to edit page so user can add contacts or see preview
       router.push(`/app/lists/${response.data.list.id}`)
     }
   } catch (err: any) {
