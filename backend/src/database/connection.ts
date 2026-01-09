@@ -81,6 +81,7 @@ async function runMigrations(): Promise<void> {
       createContactTagsTable,
       createTrackingTokensTable,
       addUserFooterSettings,
+      addEmailEventsProviderEventIdIndex,
     ];
     
     for (const migration of migrations) {
@@ -367,6 +368,10 @@ async function createEmailEventsTable(client: PoolClient): Promise<void> {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_email_events_occurred_at ON email_events(occurred_at)
   `);
+  
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_email_events_provider_event_id ON email_events(provider_event_id)
+  `);
 }
 
 async function createSuppressionListTable(client: PoolClient): Promise<void> {
@@ -539,6 +544,13 @@ async function addUserFooterSettings(client: PoolClient): Promise<void> {
         ALTER TABLE users ADD COLUMN custom_footer_text TEXT;
       END IF;
     END $$;
+  `);
+}
+
+async function addEmailEventsProviderEventIdIndex(client: PoolClient): Promise<void> {
+  // Add index on provider_event_id for faster webhook lookups
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_email_events_provider_event_id ON email_events(provider_event_id)
   `);
 }
 

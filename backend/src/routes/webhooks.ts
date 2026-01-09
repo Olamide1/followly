@@ -18,29 +18,56 @@ router.post('/resend', async (req: Request, res: Response) => {
     for (const event of events) {
       const { type, data } = event;
       
+      // Resend sends email_id in data.email_id or data.id
+      const resendEmailId = data?.email_id || data?.id;
+      
+      if (!resendEmailId) {
+        console.warn(`Resend webhook: No email_id in event data for type ${type}`);
+        continue;
+      }
+
       // Find email_queue record by looking up in email_events first (where provider_event_id is stored)
+      // We store the Resend email_id as provider_event_id when the email is sent
       const eventResult = await pool.query(
-        'SELECT email_queue_id, contact_id, campaign_id FROM email_events WHERE provider_event_id = $1 LIMIT 1',
-        [data?.email_id || data?.id]
+        `SELECT DISTINCT e.email_queue_id, e.contact_id, e.campaign_id 
+         FROM email_events e
+         WHERE e.provider_event_id = $1
+         LIMIT 1`,
+        [resendEmailId]
       );
 
       if (eventResult.rows.length === 0) {
-        // Try to find by email address and recent sent time (fallback)
+        // Fallback: Try to find by email address and recent sent time
+        // This handles cases where the initial 'sent' event hasn't been recorded yet
+        const recipientEmail = data?.to || data?.recipient;
+        if (!recipientEmail) {
+          console.warn(`Resend webhook: No email found for event ${type} with ID ${resendEmailId} and no recipient email`);
+          continue;
+        }
+        
         const emailQueueResult = await pool.query(
           `SELECT eq.id, eq.contact_id, eq.campaign_id 
            FROM email_queue eq
            JOIN contacts c ON c.id = eq.contact_id
            WHERE eq.provider = $1 AND c.email = $2 AND eq.status = 'sent'
            ORDER BY eq.sent_at DESC LIMIT 1`,
-          ['resend', data?.to || data?.recipient]
+          ['resend', recipientEmail]
         );
         
         if (emailQueueResult.rows.length === 0) {
-          console.warn(`Resend webhook: No email found for event ${type} with ID ${data?.email_id || data?.id}`);
+          console.warn(`Resend webhook: No email found for event ${type} with ID ${resendEmailId} and recipient ${recipientEmail}`);
           continue;
         }
         
         const { id: email_queue_id, contact_id, campaign_id } = emailQueueResult.rows[0];
+        
+        // Store the provider_event_id for future lookups
+        await pool.query(
+          `INSERT INTO email_events (email_queue_id, contact_id, campaign_id, event_type, provider_event_id)
+           VALUES ($1, $2, $3, 'sent', $4)
+           ON CONFLICT DO NOTHING`,
+          [email_queue_id, contact_id, campaign_id, resendEmailId]
+        );
         
         // Handle different event types
         switch (type) {

@@ -487,49 +487,52 @@ export class CampaignService {
   }
 
   async getCampaignStats(userId: number, campaignId: number) {
-    const result = await pool.query(
-      `SELECT 
-        COUNT(*) FILTER (WHERE status = 'sent') as sent,
-        COUNT(*) FILTER (WHERE status = 'delivered') as delivered,
-        COUNT(*) FILTER (WHERE status = 'bounced') as bounced,
-        COUNT(*) FILTER (WHERE status = 'complained') as complained
+    // Get sent count from email_queue (emails that were sent)
+    const sentResult = await pool.query(
+      `SELECT COUNT(*) as sent
        FROM email_queue
-       WHERE campaign_id = $1 AND user_id = $2`,
+       WHERE campaign_id = $1 AND user_id = $2 AND status = 'sent'`,
+      [campaignId, userId]
+    );
+    const sent = parseInt(sentResult.rows[0]?.sent || '0');
+
+    // Get all engagement stats from email_events (delivered, bounced, complained, opened, clicked)
+    // Count distinct email_queue_ids to get unique events per email (not total events)
+    const eventsResult = await pool.query(
+      `SELECT 
+        COUNT(DISTINCT CASE WHEN e.event_type = 'delivered' THEN e.email_queue_id END) as delivered,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'bounced' THEN e.email_queue_id END) as bounced,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'complained' THEN e.email_queue_id END) as complained,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'opened' THEN e.email_queue_id END) as opens,
+        COUNT(DISTINCT CASE WHEN e.event_type = 'clicked' THEN e.email_queue_id END) as clicks
+       FROM email_events e
+       INNER JOIN email_queue eq ON e.email_queue_id = eq.id
+       WHERE eq.campaign_id = $1 AND eq.user_id = $2`,
       [campaignId, userId]
     );
 
-    const stats = result.rows[0];
-    const sent = parseInt(stats.sent) || 0;
-    const delivered = parseInt(stats.delivered) || 0;
-
-    // Get opens and clicks from events - count distinct emails, not total events
-    const eventsResult = await pool.query(
-      `SELECT 
-        COUNT(DISTINCT CASE WHEN event_type = 'opened' THEN email_queue_id END) as opens,
-        COUNT(DISTINCT CASE WHEN event_type = 'clicked' THEN email_queue_id END) as clicks
-       FROM email_events
-       WHERE campaign_id = $1`,
-      [campaignId]
-    );
-
-    const events = eventsResult.rows[0];
-    const opens = parseInt(events.opens) || 0;
-    const clicks = parseInt(events.clicks) || 0;
+    const events = eventsResult.rows[0] || {};
+    const delivered = parseInt(events.delivered || '0');
+    const bounced = parseInt(events.bounced || '0');
+    const complained = parseInt(events.complained || '0');
+    const opens = parseInt(events.opens || '0');
+    const clicks = parseInt(events.clicks || '0');
 
     // Calculate rates
     const openRate = sent > 0 ? ((opens / sent) * 100).toFixed(2) : '0.00';
     const clickRate = sent > 0 ? ((clicks / sent) * 100).toFixed(2) : '0.00';
+    const deliveryRate = sent > 0 ? ((delivered / sent) * 100).toFixed(2) : '0.00';
 
     return {
       sent,
       delivered,
-      bounced: parseInt(stats.bounced) || 0,
-      complained: parseInt(stats.complained) || 0,
+      bounced,
+      complained,
       opens,
       clicks,
       openRate,
       clickRate,
-      deliveryRate: sent > 0 ? (delivered / sent * 100).toFixed(2) : '0.00',
+      deliveryRate,
     };
   }
 

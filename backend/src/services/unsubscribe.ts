@@ -13,12 +13,18 @@ export function generateUnsubscribeToken(userId: number, email: string): string 
  * Get the base URL for frontend (unsubscribe/preferences pages)
  */
 function getFrontendBaseUrl(): string {
-  // In production, use the Heroku app URL or FRONTEND_URL env var
-  if (process.env.NODE_ENV === 'production') {
-    return process.env.FRONTEND_URL || process.env.APP_URL || 'https://followly-1a83c23a0be1.herokuapp.com';
+  // Always check environment variable first (allows override in any environment)
+  if (process.env.FRONTEND_URL) {
+    return process.env.FRONTEND_URL;
   }
+  
+  // In production, use the Heroku app URL as default
+  if (process.env.NODE_ENV === 'production') {
+    return process.env.APP_URL || 'https://followly-1a83c23a0be1.herokuapp.com';
+  }
+  
   // In development, use localhost
-  return process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:5173';
+  return process.env.APP_URL || 'http://localhost:5173';
 }
 
 /**
