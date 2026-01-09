@@ -416,6 +416,232 @@ export class ListService {
     };
   }
 
+  // Helper function to validate email format
+  private isValidEmail(email: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+  }
+
+  // Import contacts from CSV and add them to a list
+  async importContactsFromCSV(
+    userId: number,
+    listId: number,
+    contacts: Array<{
+      email: string;
+      name?: string;
+      company?: string;
+      role?: string;
+      country?: string;
+      subscription_status?: string;
+    }>
+  ): Promise<{
+    imported: number;
+    added: number;
+    updated: number;
+    alreadyInList: number;
+    failed: number;
+    skipped: number;
+    errors: string[];
+  }> {
+    const client = await pool.connect();
+    const errors: string[] = [];
+    let imported = 0;
+    let updated = 0;
+    let added = 0;
+    let failed = 0;
+    let skipped = 0;
+    let alreadyInList = 0;
+    const contactIds: number[] = [];
+
+    try {
+      await client.query('BEGIN');
+
+      // Verify list ownership and type
+      const listResult = await client.query(
+        'SELECT type FROM lists WHERE id = $1 AND user_id = $2',
+        [listId, userId]
+      );
+
+      if (listResult.rows.length === 0) {
+        throw createError('List not found', 404);
+      }
+
+      if (listResult.rows[0].type === 'smart') {
+        throw createError('Cannot manually add contacts to smart lists', 400);
+      }
+
+      // Check which contacts are already in the list (for reporting)
+      const existingListContacts = await client.query(
+        `SELECT c.id, c.email 
+         FROM contacts c
+         INNER JOIN list_contacts lc ON c.id = lc.contact_id
+         WHERE lc.list_id = $1 AND c.user_id = $2`,
+        [listId, userId]
+      );
+      const listContactIds = new Set(existingListContacts.rows.map((r: any) => r.id));
+
+      // Deduplicate contacts by email (keep first occurrence, skip duplicates)
+      const uniqueContacts: Array<{
+        email: string;
+        name?: string;
+        company?: string;
+        role?: string;
+        country?: string;
+        subscription_status?: string;
+        isDuplicate?: boolean;
+      }> = [];
+      const processedEmails = new Set<string>();
+
+      for (const contactData of contacts) {
+        const normalizedEmail = contactData.email.toLowerCase().trim();
+        
+        // Validate email format
+        if (!this.isValidEmail(normalizedEmail)) {
+          failed++;
+          errors.push(`${contactData.email}: Invalid email format`);
+          continue;
+        }
+
+        // Skip duplicates within CSV (keep first occurrence)
+        if (processedEmails.has(normalizedEmail)) {
+          skipped++;
+          continue;
+        }
+        processedEmails.add(normalizedEmail);
+        uniqueContacts.push(contactData);
+      }
+
+      // Import/update contacts and collect IDs
+      for (const contactData of uniqueContacts) {
+        try {
+          const normalizedEmail = contactData.email.toLowerCase().trim();
+          
+          // Check if contact exists
+          const existing = await client.query(
+            'SELECT id FROM contacts WHERE user_id = $1 AND email = $2',
+            [userId, normalizedEmail]
+          );
+
+          let contactId: number;
+          let wasAlreadyInList = false;
+
+          if (existing.rows.length > 0) {
+            // Update existing contact
+            contactId = existing.rows[0].id;
+            
+            // Check if already in list
+            if (listContactIds.has(contactId)) {
+              alreadyInList++;
+              wasAlreadyInList = true;
+            }
+            
+            // Update contact fields (only non-empty values)
+            const updates: string[] = [];
+            const params: any[] = [];
+            let paramCount = 1;
+
+            if (contactData.name !== undefined && contactData.name.trim()) {
+              updates.push(`name = $${paramCount++}`);
+              params.push(contactData.name.trim());
+            }
+            if (contactData.company !== undefined && contactData.company.trim()) {
+              updates.push(`company = $${paramCount++}`);
+              params.push(contactData.company.trim());
+            }
+            if (contactData.role !== undefined && contactData.role.trim()) {
+              updates.push(`role = $${paramCount++}`);
+              params.push(contactData.role.trim());
+            }
+            if (contactData.country !== undefined && contactData.country.trim()) {
+              updates.push(`country = $${paramCount++}`);
+              params.push(contactData.country.trim());
+            }
+            if (contactData.subscription_status !== undefined) {
+              updates.push(`subscription_status = $${paramCount++}`);
+              params.push(contactData.subscription_status);
+            }
+
+            if (updates.length > 0) {
+              updates.push(`updated_at = CURRENT_TIMESTAMP`);
+              params.push(contactId, userId);
+              await client.query(
+                `UPDATE contacts SET ${updates.join(', ')} WHERE id = $${paramCount++} AND user_id = $${paramCount++}`,
+                params
+              );
+              updated++;
+            } else {
+              updated++;
+            }
+          } else {
+            // Create new contact
+            const result = await client.query(
+              `INSERT INTO contacts 
+               (user_id, email, name, company, role, country, subscription_status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               RETURNING id`,
+              [
+                userId,
+                normalizedEmail,
+                contactData.name?.trim() || null,
+                contactData.company?.trim() || null,
+                contactData.role?.trim() || null,
+                contactData.country?.trim() || null,
+                contactData.subscription_status || 'subscribed',
+              ]
+            );
+            contactId = result.rows[0].id;
+            added++;
+          }
+
+          // Only add to contactIds if not already in list
+          if (!wasAlreadyInList) {
+            contactIds.push(contactId);
+          }
+          imported++;
+        } catch (error: any) {
+          failed++;
+          errors.push(`${contactData.email}: ${error.message}`);
+        }
+      }
+
+      // Add all successfully imported contacts to the list (with conflict handling)
+      if (contactIds.length > 0) {
+        // Check which ones are actually new vs already in list
+        const values = contactIds.map((_, index) => {
+          const base = index * 2;
+          return `($${base + 1}, $${base + 2})`;
+        }).join(', ');
+
+        const params: any[] = [];
+        contactIds.forEach(id => {
+          params.push(listId, id);
+        });
+
+        await client.query(
+          `INSERT INTO list_contacts (list_id, contact_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+          params
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return {
+      imported,
+      added,
+      updated,
+      alreadyInList,
+      failed,
+      skipped,
+      errors,
+    };
+  }
+
   private async evaluateSmartList(userId: number, rules: SmartListRules): Promise<any[]> {
     if (!rules || !rules.rules || rules.rules.length === 0) {
       return [];

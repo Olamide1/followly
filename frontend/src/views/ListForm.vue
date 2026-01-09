@@ -215,9 +215,14 @@
           <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-2">Contacts in List</h2>
           <p class="text-xs text-ink-600">{{ listContacts.length }} contacts</p>
         </div>
-        <button @click="showAddContactModal = true" class="btn btn-primary text-xs">
-          Add Contacts
-        </button>
+        <div class="flex space-x-2">
+          <button @click="showCsvImportModal = true" class="btn btn-secondary text-xs">
+            Import CSV
+          </button>
+          <button @click="showAddContactModal = true" class="btn btn-primary text-xs">
+            Add Contacts
+          </button>
+        </div>
       </div>
 
       <div v-if="loadingContacts" class="text-center py-12">
@@ -249,9 +254,198 @@
           <p class="text-ink-700 leading-relaxed mb-6 text-sm">
             Add contacts to this list to start organizing your audience.
           </p>
-          <button @click="showAddContactModal = true" class="btn btn-primary text-xs">
-            Add Contacts
-          </button>
+          <div class="flex space-x-2">
+            <button @click="showCsvImportModal = true" class="btn btn-secondary text-xs">
+              Import CSV
+            </button>
+            <button @click="showAddContactModal = true" class="btn btn-primary text-xs">
+              Add Contacts
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CSV Import Modal -->
+    <div
+      v-if="showCsvImportModal"
+      class="fixed inset-0 bg-ink-900 bg-opacity-40 flex items-center justify-center z-50"
+      @click="showCsvImportModal = false"
+    >
+      <div class="bg-paper border border-grid-medium p-8 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto" @click.stop>
+        <h2 class="text-lg font-light text-ink-900 mb-6 tracking-wide">Import Contacts from CSV</h2>
+        
+        <!-- Step 1: Upload -->
+        <div v-if="csvImportStep === 'upload'" class="space-y-6">
+          <div>
+            <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+              Select CSV File
+            </label>
+            <input
+              ref="csvFileInput"
+              type="file"
+              accept=".csv"
+              @change="handleCsvFileSelect"
+              class="input"
+            />
+            <p class="text-xs text-ink-600 mt-2">
+              Select a CSV file with contact information. The file should contain email addresses and optionally name, company, role, and country.
+            </p>
+          </div>
+
+          <div v-if="csvImportError" class="p-4 bg-red-50 border border-red-200 rounded">
+            <p class="text-sm text-red-700">{{ csvImportError }}</p>
+          </div>
+
+          <div class="flex justify-end space-x-4">
+            <button @click="showCsvImportModal = false" class="btn">Cancel</button>
+            <button 
+              @click="parseCsvForMapping" 
+              :disabled="!csvData"
+              class="btn btn-primary"
+            >
+              Next: Map Columns
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 2: Column Mapping -->
+        <div v-if="csvImportStep === 'mapping'" class="space-y-6">
+          <div>
+            <h3 class="text-sm font-normal text-ink-700 mb-4">Map CSV Columns</h3>
+            <p class="text-xs text-ink-600 mb-4">
+              Select which columns in your CSV file correspond to each field. Email is required.
+            </p>
+
+            <div class="space-y-4">
+              <div>
+                <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                  Email <span class="text-red-500">*</span>
+                </label>
+                <select v-model="csvColumnMapping.email" class="input" required>
+                  <option value="">Select column...</option>
+                  <option v-for="col in csvColumns" :key="col" :value="col">{{ col }}</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                  Name (optional)
+                </label>
+                <select v-model="csvColumnMapping.name" class="input">
+                  <option value="">Select column...</option>
+                  <option v-for="col in csvColumns" :key="col" :value="col">{{ col }}</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                  Company (optional)
+                </label>
+                <select v-model="csvColumnMapping.company" class="input">
+                  <option value="">Select column...</option>
+                  <option v-for="col in csvColumns" :key="col" :value="col">{{ col }}</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                  Role (optional)
+                </label>
+                <select v-model="csvColumnMapping.role" class="input">
+                  <option value="">Select column...</option>
+                  <option v-for="col in csvColumns" :key="col" :value="col">{{ col }}</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                  Country (optional)
+                </label>
+                <select v-model="csvColumnMapping.country" class="input">
+                  <option value="">Select column...</option>
+                  <option v-for="col in csvColumns" :key="col" :value="col">{{ col }}</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="mt-6 p-4 bg-ink-50 border border-grid-light rounded">
+              <p class="text-xs font-medium text-ink-700 mb-2">Preview (first 3 rows):</p>
+              <div class="overflow-x-auto">
+                <table class="text-xs w-full">
+                  <thead>
+                    <tr class="border-b border-grid-medium">
+                      <th v-for="col in csvColumns" :key="col" class="text-left p-2">{{ col }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, idx) in csvRows" :key="idx" class="border-b border-grid-light">
+                      <td v-for="col in csvColumns" :key="col" class="p-2">{{ row[col] || '' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="csvImportError" class="p-4 bg-red-50 border border-red-200 rounded">
+            <p class="text-sm text-red-700">{{ csvImportError }}</p>
+          </div>
+
+          <div class="flex justify-end space-x-4">
+            <button @click="csvImportStep = 'upload'" class="btn">Back</button>
+            <button 
+              @click="handleCsvImport" 
+              :disabled="!csvColumnMapping.email || importingCsv"
+              class="btn btn-primary"
+            >
+              {{ importingCsv ? 'Importing...' : 'Import Contacts' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 3: Results -->
+        <div v-if="csvImportStep === 'results'" class="space-y-6">
+          <div class="p-6 bg-ink-50 border border-grid-light rounded">
+            <h3 class="text-sm font-medium text-ink-900 mb-4">Import Complete</h3>
+            <div class="space-y-2 text-sm">
+              <p class="text-base font-medium text-ink-900 mb-3">
+                <span class="font-medium">Total processed:</span> {{ csvImportResult?.imported || 0 }} contacts
+              </p>
+              
+              <div class="space-y-2 text-sm border-t border-grid-medium pt-3">
+                <p v-if="(csvImportResult?.added || 0) > 0" class="text-green-700">
+                  <span class="font-medium">✓ New contacts added:</span> {{ csvImportResult?.added || 0 }}
+                </p>
+                <p v-if="(csvImportResult?.updated || 0) > 0" class="text-blue-700">
+                  <span class="font-medium">✓ Existing contacts updated:</span> {{ csvImportResult?.updated || 0 }}
+                </p>
+                <p v-if="(csvImportResult?.alreadyInList || 0) > 0" class="text-ink-600">
+                  <span class="font-medium">⊘ Already in list:</span> {{ csvImportResult?.alreadyInList || 0 }} (skipped)
+                </p>
+                <p v-if="(csvImportResult?.skipped || 0) > 0" class="text-ink-600">
+                  <span class="font-medium">⊘ Duplicates in CSV:</span> {{ csvImportResult?.skipped || 0 }} (kept first occurrence)
+                </p>
+                <p v-if="(csvImportResult?.failed || 0) > 0" class="text-red-700">
+                  <span class="font-medium">✗ Failed:</span> {{ csvImportResult?.failed || 0 }}
+                </p>
+              </div>
+            </div>
+
+            <div v-if="csvImportResult?.errors && csvImportResult.errors.length > 0" class="mt-4">
+              <p class="text-xs font-medium text-ink-700 mb-2">Errors:</p>
+              <ul class="text-xs text-red-700 space-y-1 max-h-32 overflow-y-auto">
+                <li v-for="(error, idx) in csvImportResult.errors.slice(0, 10)" :key="idx">{{ error }}</li>
+                <li v-if="csvImportResult.errors.length > 10" class="text-ink-600">
+                  ... and {{ csvImportResult.errors.length - 10 }} more errors
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="flex justify-end">
+            <button @click="closeCsvImportModal" class="btn btn-primary">Done</button>
+          </div>
         </div>
       </div>
     </div>
@@ -372,6 +566,38 @@ const availableContacts = ref<any[]>([])
 const loadingAvailableContacts = ref(false)
 const contactSearch = ref('')
 const addingContactId = ref<number | null>(null)
+
+// CSV Import state
+const showCsvImportModal = ref(false)
+const csvFileInput = ref<HTMLInputElement | null>(null)
+const csvData = ref<string>('')
+const csvImportStep = ref<'upload' | 'mapping' | 'results'>('upload')
+const csvColumns = ref<string[]>([])
+const csvRows = ref<any[]>([])
+const csvColumnMapping = ref<{
+  email: string
+  name: string
+  company: string
+  role: string
+  country: string
+}>({
+  email: '',
+  name: '',
+  company: '',
+  role: '',
+  country: '',
+})
+const csvImportError = ref('')
+const importingCsv = ref(false)
+const csvImportResult = ref<{
+  imported: number
+  added: number
+  updated: number
+  alreadyInList: number
+  failed: number
+  skipped: number
+  errors: string[]
+} | null>(null)
 
 onMounted(async () => {
   if (isEdit.value) {
@@ -526,6 +752,170 @@ async function removeContact(contactId: number) {
   } catch (err) {
     console.error('Failed to remove contact:', err)
     alert('Failed to remove contact from list')
+  }
+}
+
+function handleCsvFileSelect(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  
+  if (!file) return
+  
+  if (!file.name.endsWith('.csv')) {
+    csvImportError.value = 'Please select a CSV file'
+    return
+  }
+  
+  csvImportError.value = ''
+  csvImportResult.value = null
+  csvImportStep.value = 'upload'
+  
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const content = e.target?.result as string
+    csvData.value = content
+  }
+  reader.onerror = () => {
+    csvImportError.value = 'Failed to read file'
+  }
+  reader.readAsText(file)
+}
+
+function parseCsvForMapping() {
+  if (!csvData.value) {
+    csvImportError.value = 'No CSV data to parse'
+    return
+  }
+
+  try {
+    // Simple CSV parsing for preview
+    const lines = csvData.value.split('\n').filter(line => line.trim())
+    if (lines.length === 0) {
+      csvImportError.value = 'CSV file appears to be empty'
+      return
+    }
+
+    // Parse header
+    const headerLine = lines[0]
+    csvColumns.value = headerLine.split(',').map(col => col.trim().replace(/^"|"$/g, ''))
+    
+    // Parse first few rows for preview
+    const rows: any[] = []
+    for (let i = 1; i < Math.min(4, lines.length); i++) {
+      const values = lines[i].split(',').map(val => val.trim().replace(/^"|"$/g, ''))
+      const row: any = {}
+      csvColumns.value.forEach((col, idx) => {
+        row[col] = values[idx] || ''
+      })
+      rows.push(row)
+    }
+    csvRows.value = rows
+
+    // Try to auto-detect email column
+    const emailCol = csvColumns.value.find(col => 
+      /email|e-mail|mail/i.test(col)
+    )
+    if (emailCol) {
+      csvColumnMapping.value.email = emailCol
+    }
+
+    // Try to auto-detect other common fields
+    const nameCol = csvColumns.value.find(col => 
+      /name|full.?name|contact.?name/i.test(col)
+    )
+    if (nameCol) {
+      csvColumnMapping.value.name = nameCol
+    }
+
+    const companyCol = csvColumns.value.find(col => 
+      /company|organization|org|employer/i.test(col)
+    )
+    if (companyCol) {
+      csvColumnMapping.value.company = companyCol
+    }
+
+    const roleCol = csvColumns.value.find(col => 
+      /role|title|job.?title|position/i.test(col)
+    )
+    if (roleCol) {
+      csvColumnMapping.value.role = roleCol
+    }
+
+    const countryCol = csvColumns.value.find(col => 
+      /country|nation|location/i.test(col)
+    )
+    if (countryCol) {
+      csvColumnMapping.value.country = countryCol
+    }
+
+    csvImportStep.value = 'mapping'
+    csvImportError.value = ''
+    
+    // Validate email format in preview
+    if (emailCol) {
+      const emails = rows.map(row => row[emailCol]).filter(email => email)
+      const invalidEmails = emails.filter(email => {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+        return !emailRegex.test(email.trim())
+      })
+      if (invalidEmails.length > 0) {
+        csvImportError.value = `Warning: ${invalidEmails.length} invalid email format(s) detected in preview rows`
+      }
+    }
+  } catch (err: any) {
+    csvImportError.value = err.message || 'Failed to parse CSV file'
+  }
+}
+
+async function handleCsvImport() {
+  if (!isEdit.value || !csvData.value || !csvColumnMapping.value.email) {
+    csvImportError.value = 'Email column mapping is required'
+    return
+  }
+
+  importingCsv.value = true
+  csvImportError.value = ''
+
+  try {
+    const response = await api.post(`/lists/${route.params.id}/contacts/import`, {
+      csv: csvData.value,
+      columnMapping: csvColumnMapping.value,
+    })
+
+    csvImportResult.value = response.data
+    csvImportStep.value = 'results'
+    
+    // Reload list contacts after successful import
+    if (response.data.imported > 0) {
+      setTimeout(() => {
+        loadListContacts()
+      }, 1500)
+    }
+  } catch (err: any) {
+    csvImportError.value = err.response?.data?.error || 'Failed to import contacts'
+    console.error('Failed to import contacts:', err)
+  } finally {
+    importingCsv.value = false
+  }
+}
+
+function closeCsvImportModal() {
+  showCsvImportModal.value = false
+  csvImportStep.value = 'upload'
+  csvData.value = ''
+  csvColumns.value = []
+  csvRows.value = []
+  csvColumnMapping.value = {
+    email: '',
+    name: '',
+    company: '',
+    role: '',
+    country: '',
+  }
+  csvImportError.value = ''
+  csvImportResult.value = null
+  if (csvFileInput.value) {
+    csvFileInput.value.value = ''
   }
 }
 

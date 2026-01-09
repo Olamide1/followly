@@ -134,7 +134,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response, next: NextFunction
 });
 
 // Smart column mapper - handles various column name variations
-function mapContactFields(record: any): any {
+export function mapContactFields(record: any): any {
   // First, try to find email in original record (case-insensitive)
   let email: string | undefined;
   

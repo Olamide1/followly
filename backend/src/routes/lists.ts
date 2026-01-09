@@ -2,6 +2,8 @@ import { Router, Response, NextFunction } from 'express';
 import { ListService } from '../services/lists';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { createError } from '../middleware/errorHandler';
+import { parse } from 'csv-parse/sync';
+import { mapContactFields } from './contacts';
 
 const router = Router();
 router.use(authenticateToken);
@@ -186,6 +188,86 @@ router.get('/:id/contacts', async (req: AuthRequest, res: Response, next: NextFu
     res.json(result);
   } catch (error: any) {
     next(error);
+  }
+});
+
+// Import contacts from CSV and add to list (MUST come before /:id/contacts/:contactId)
+router.post('/:id/contacts/import', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const listId = parseInt(req.params.id, 10);
+    
+    if (isNaN(listId) || listId <= 0) {
+      throw createError('Invalid list ID', 400);
+    }
+
+    if (!req.body.csv || typeof req.body.csv !== 'string') {
+      throw createError('CSV data required', 400);
+    }
+
+    const columnMapping = req.body.columnMapping || {};
+
+    // Parse CSV
+    let records: any[];
+    try {
+      records = parse(req.body.csv, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+        relax_column_count: true,
+        skip_records_with_empty_values: false,
+      });
+    } catch (parseError: any) {
+      throw createError(`CSV parsing error: ${parseError.message}`, 400);
+    }
+
+    if (!records || records.length === 0) {
+      throw createError('CSV file appears to be empty or has no data rows.', 400);
+    }
+
+    // Map records using provided mapping or smart field mapping
+    const contacts = records
+      .map((record: any) => {
+        let mapped: any;
+        
+        // If column mapping is provided, use it
+        if (columnMapping && Object.keys(columnMapping).length > 0) {
+          mapped = {
+            email: columnMapping.email ? (record[columnMapping.email] || '').trim() : '',
+            name: columnMapping.name ? (record[columnMapping.name] || '').trim() : undefined,
+            company: columnMapping.company ? (record[columnMapping.company] || '').trim() : undefined,
+            role: columnMapping.role ? (record[columnMapping.role] || '').trim() : undefined,
+            country: columnMapping.country ? (record[columnMapping.country] || '').trim() : undefined,
+            subscription_status: columnMapping.subscription_status 
+              ? (record[columnMapping.subscription_status] || '').trim().toLowerCase() || 'subscribed'
+              : 'subscribed',
+          };
+        } else {
+          // Fall back to smart field mapping
+          mapped = mapContactFields(record);
+        }
+        
+        return mapped;
+      })
+      .filter((c: any) => c.email && c.email.trim() && c.email.length > 0); // Filter out contacts without email
+
+    if (contacts.length === 0) {
+      const sampleColumns = records.length > 0 ? Object.keys(records[0]).join(', ') : 'none';
+      throw createError(
+        `No valid contacts found in CSV. Detected columns: ${sampleColumns}. ` +
+        `Ensure your CSV has a column containing email addresses and that the email column is properly mapped.`,
+        400
+      );
+    }
+
+    const service = new ListService();
+    const result = await service.importContactsFromCSV(req.userId!, listId, contacts);
+    
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error: any) {
+    return next(error);
   }
 });
 
