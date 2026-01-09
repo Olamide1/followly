@@ -137,60 +137,6 @@ router.post('/:id/contacts/preview', async (req: AuthRequest, res: Response, nex
   }
 });
 
-// Add contact to list (MUST come after /bulk and /preview routes)
-router.post('/:id/contacts/:contactId', async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const listId = parseInt(req.params.id, 10);
-    const contactId = parseInt(req.params.contactId, 10);
-
-    if (isNaN(listId) || listId <= 0) {
-      throw createError('Invalid list ID', 400);
-    }
-    if (isNaN(contactId) || contactId <= 0) {
-      throw createError('Invalid contact ID', 400);
-    }
-
-    const service = new ListService();
-    await service.addContactToList(
-      req.userId!,
-      listId,
-      contactId
-    );
-    res.json({ success: true });
-  } catch (error: any) {
-    next(error);
-  }
-});
-
-// Remove contact from list
-router.delete('/:id/contacts/:contactId', async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const service = new ListService();
-    await service.removeContactFromList(
-      req.userId!,
-      parseInt(req.params.id),
-      parseInt(req.params.contactId)
-    );
-    res.json({ success: true });
-  } catch (error: any) {
-    next(error);
-  }
-});
-
-// Get list contacts
-router.get('/:id/contacts', async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const service = new ListService();
-    const result = await service.getListContacts(req.userId!, parseInt(req.params.id), {
-      page: parseInt(req.query.page as string) || 1,
-      limit: parseInt(req.query.limit as string) || 50,
-    });
-    res.json(result);
-  } catch (error: any) {
-    next(error);
-  }
-});
-
 // Import contacts from CSV and add to list (MUST come before /:id/contacts/:contactId)
 router.post('/:id/contacts/import', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -268,6 +214,60 @@ router.post('/:id/contacts/import', async (req: AuthRequest, res: Response, next
     });
   } catch (error: any) {
     return next(error);
+  }
+});
+
+// Add contact to list (MUST come after /bulk, /preview, and /import routes)
+router.post('/:id/contacts/:contactId', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const listId = parseInt(req.params.id, 10);
+    const contactId = parseInt(req.params.contactId, 10);
+
+    if (isNaN(listId) || listId <= 0) {
+      throw createError('Invalid list ID', 400);
+    }
+    if (isNaN(contactId) || contactId <= 0) {
+      throw createError('Invalid contact ID', 400);
+    }
+
+    const service = new ListService();
+    await service.addContactToList(
+      req.userId!,
+      listId,
+      contactId
+    );
+    res.json({ success: true });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Remove contact from list
+router.delete('/:id/contacts/:contactId', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const service = new ListService();
+    await service.removeContactFromList(
+      req.userId!,
+      parseInt(req.params.id),
+      parseInt(req.params.contactId)
+    );
+    res.json({ success: true });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Get list contacts
+router.get('/:id/contacts', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const service = new ListService();
+    const result = await service.getListContacts(req.userId!, parseInt(req.params.id), {
+      page: parseInt(req.query.page as string) || 1,
+      limit: parseInt(req.query.limit as string) || 50,
+    });
+    res.json(result);
+  } catch (error: any) {
+    next(error);
   }
 });
 
