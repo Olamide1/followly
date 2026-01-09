@@ -77,7 +77,7 @@ router.get('/suppression', authenticateToken, async (req: AuthRequest, res: Resp
     );
     res.json({ suppressions: result.rows });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -90,7 +90,7 @@ router.delete('/suppression/:email', authenticateToken, async (req: AuthRequest,
     );
     res.json({ success: true });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -126,7 +126,7 @@ router.get('/preferences', async (req: Request, res: Response, next: NextFunctio
       found: true,
     });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -190,7 +190,7 @@ router.post('/preferences', async (req: Request, res: Response, next: NextFuncti
       subscription_status,
     });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 
