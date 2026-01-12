@@ -209,6 +209,11 @@ export async function processEmailQueue(job: Job) {
     
     // Create a temporary routing service with user's providers for selection
     const userRoutingService = new RoutingService(providerService);
+    
+    // Debug: Log available providers
+    const availableProviders = ['brevo', 'mailjet', 'resend'].filter(p => providerService.hasProvider(p as ProviderType));
+    console.log(`Available providers for user ${userId}:`, availableProviders);
+    
     const routingDecision = await userRoutingService.selectProvider(userId, campaignType);
 
     // Check warmup limits with the actual provider

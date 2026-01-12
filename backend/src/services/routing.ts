@@ -113,28 +113,36 @@ export class RoutingService {
   ): Promise<boolean> {
     // Check if provider is configured first (no Redis call needed)
     if (!this.providerService.hasProvider(provider)) {
+      console.log(`Provider ${provider} not found in providerService for user ${userId}`);
       return false;
     }
 
-    const redis = this.getRedis();
-    const today = new Date().toISOString().split('T')[0];
-    const countKey = `provider:${userId}:${provider}:${today}:count`;
+    try {
+      const redis = this.getRedis();
+      const today = new Date().toISOString().split('T')[0];
+      const countKey = `provider:${userId}:${provider}:${today}:count`;
 
-    // Batch Redis calls
-    const [count, dailyLimit] = await Promise.all([
-      redis.get(countKey),
-      this.getProviderDailyLimit(userId, provider),
-    ]);
+      // Batch Redis calls - if Redis fails, allow the provider (fail open)
+      const [count, dailyLimit] = await Promise.all([
+        redis.get(countKey).catch(() => null), // If Redis fails, treat as no count
+        this.getProviderDailyLimit(userId, provider),
+      ]);
 
-    // Check daily limit
-    if (count && parseInt(count) >= dailyLimit) {
-      return false;
+      // Check daily limit
+      if (count && parseInt(count) >= dailyLimit) {
+        return false;
+      }
+
+      // Note: Error rate checking is temporarily disabled due to bug in error key logic
+      // TODO: Implement proper error rate checking using Redis SCAN or sorted sets
+
+      return true;
+    } catch (error) {
+      // If Redis or any check fails, allow the provider (fail open)
+      // Log the error but don't block email sending
+      console.error(`Error checking provider availability for ${provider}:`, error);
+      return true;
     }
-
-    // Note: Error rate checking is temporarily disabled due to bug in error key logic
-    // TODO: Implement proper error rate checking using Redis SCAN or sorted sets
-
-    return true;
   }
 
   private async getProviderDailyLimit(userId: number, provider: ProviderType): Promise<number> {
