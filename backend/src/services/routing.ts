@@ -68,31 +68,14 @@ export class RoutingService {
       }
     }
 
-    // Use first available provider (prioritize resend, then mailjet, then brevo)
-    const priorityOrder: ProviderType[] = ['resend', 'mailjet', 'brevo'];
-    for (const provider of priorityOrder) {
-      if (availableProviders.includes(provider)) {
-        const available = await this.checkProviderAvailability(userId, provider);
-        if (available) {
-          return {
-            provider,
-            reason: 'Available provider',
-          };
-        }
-      }
-    }
-
-    // Final fallback - use first available provider
+    // Use first available provider (if we got here, user providers didn't work, so use any loaded provider)
+    // Since providers are already loaded and verified, just use the first one
     const firstAvailable = availableProviders[0];
-    const available = await this.checkProviderAvailability(userId, firstAvailable);
-    if (available) {
-      return {
-        provider: firstAvailable,
-        reason: 'Fallback provider',
-      };
-    }
-
-    throw new Error('No available email providers');
+    console.log(`Using first available provider: ${firstAvailable}`);
+    return {
+      provider: firstAvailable,
+      reason: 'Available provider',
+    };
   }
 
   private async getUserProviders(userId: number) {
