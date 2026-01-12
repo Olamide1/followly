@@ -164,22 +164,40 @@ export async function recordClickEvent(
   if (existing.rows.length > 0) {
     // Update metadata if webhook is more reliable than link
     if (source === 'webhook') {
-      await pool.query(
-        `UPDATE email_events 
-         SET metadata = jsonb_build_object('source', 'webhook', 'url', $2, 'updated_at', CURRENT_TIMESTAMP)
-         WHERE id = $1`,
-        [existing.rows[0].id, url]
-      );
+      if (url) {
+        await pool.query(
+          `UPDATE email_events 
+           SET metadata = jsonb_build_object('source', 'webhook', 'url', $2::text, 'updated_at', CURRENT_TIMESTAMP)
+           WHERE id = $1`,
+          [existing.rows[0].id, url]
+        );
+      } else {
+        await pool.query(
+          `UPDATE email_events 
+           SET metadata = jsonb_build_object('source', 'webhook', 'updated_at', CURRENT_TIMESTAMP)
+           WHERE id = $1`,
+          [existing.rows[0].id]
+        );
+      }
     }
     return false; // Already recorded
   }
 
   // Insert new click event
-  await pool.query(
-    `INSERT INTO email_events (email_queue_id, contact_id, campaign_id, event_type, metadata)
-     VALUES ($1, $2, $3, 'clicked', jsonb_build_object('source', $4, 'url', $5))`,
-    [emailQueueId, contactId, campaignId, source, url]
-  );
+  // Handle null URL by conditionally building the JSON object
+  if (url) {
+    await pool.query(
+      `INSERT INTO email_events (email_queue_id, contact_id, campaign_id, event_type, metadata)
+       VALUES ($1, $2, $3, 'clicked', jsonb_build_object('source', $4::text, 'url', $5::text))`,
+      [emailQueueId, contactId, campaignId, source, url]
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO email_events (email_queue_id, contact_id, campaign_id, event_type, metadata)
+       VALUES ($1, $2, $3, 'clicked', jsonb_build_object('source', $4::text))`,
+      [emailQueueId, contactId, campaignId, source]
+    );
+  }
 
   console.log(`[Tracking] Successfully inserted click event for emailQueueId: ${emailQueueId}, source: ${source}, url: ${sanitizeUrlForLogging(url)}`);
   return true; // New event recorded
