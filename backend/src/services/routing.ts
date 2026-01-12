@@ -42,34 +42,27 @@ export class RoutingService {
     // Check user's provider configs from database
     const userProviders = await this.getUserProviders(userId);
     
-    // Try user's default provider first (if it's loaded)
+    // Try user's default provider first (if it's loaded) - use it directly, no need to check availability
     const userDefault = userProviders.find((p: any) => p.is_default && p.is_active);
     if (userDefault && availableProviders.includes(userDefault.provider as ProviderType)) {
-      const available = await this.checkProviderAvailability(userId, userDefault.provider);
-      if (available) {
+      return {
+        provider: userDefault.provider as ProviderType,
+        reason: 'User default provider',
+      };
+    }
+
+    // Try any active user provider (if it's loaded) - use it directly
+    const activeProviders = userProviders.filter((p: any) => p.is_active);
+    for (const provider of activeProviders) {
+      if (availableProviders.includes(provider.provider as ProviderType)) {
         return {
-          provider: userDefault.provider as ProviderType,
-          reason: 'User default provider',
+          provider: provider.provider as ProviderType,
+          reason: 'User configured provider',
         };
       }
     }
 
-    // Try any active user provider (if it's loaded)
-    const activeProviders = userProviders.filter((p: any) => p.is_active);
-    for (const provider of activeProviders) {
-      if (availableProviders.includes(provider.provider as ProviderType)) {
-        const available = await this.checkProviderAvailability(userId, provider.provider as ProviderType);
-        if (available) {
-          return {
-            provider: provider.provider as ProviderType,
-            reason: 'User configured provider',
-          };
-        }
-      }
-    }
-
-    // Use first available provider (if we got here, user providers didn't work, so use any loaded provider)
-    // Since providers are already loaded and verified, just use the first one
+    // Use first available provider - if we got here, use any loaded provider directly
     const firstAvailable = availableProviders[0];
     console.log(`Using first available provider: ${firstAvailable}`);
     return {
@@ -85,44 +78,6 @@ export class RoutingService {
     );
     console.log(`Database providers for user ${userId}:`, result.rows.map((r: any) => ({ provider: r.provider, is_active: r.is_active, is_default: r.is_default })));
     return result.rows;
-  }
-
-  private async checkProviderAvailability(
-    userId: number,
-    provider: ProviderType
-  ): Promise<boolean> {
-    // Check if provider is configured first (no Redis call needed)
-    if (!this.providerService.hasProvider(provider)) {
-      console.log(`Provider ${provider} not found in providerService for user ${userId}`);
-      return false;
-    }
-
-    try {
-      const redis = this.getRedis();
-      const today = new Date().toISOString().split('T')[0];
-      const countKey = `provider:${userId}:${provider}:${today}:count`;
-
-      // Batch Redis calls - if Redis fails, allow the provider (fail open)
-      const [count, dailyLimit] = await Promise.all([
-        redis.get(countKey).catch(() => null), // If Redis fails, treat as no count
-        this.getProviderDailyLimit(userId, provider),
-      ]);
-
-      // Check daily limit
-      if (count && parseInt(count) >= dailyLimit) {
-        return false;
-      }
-
-      // Note: Error rate checking is temporarily disabled due to bug in error key logic
-      // TODO: Implement proper error rate checking using Redis SCAN or sorted sets
-
-      return true;
-    } catch (error) {
-      // If Redis or any check fails, allow the provider (fail open)
-      // Log the error but don't block email sending
-      console.error(`Error checking provider availability for ${provider}:`, error);
-      return true;
-    }
   }
 
   private async getProviderDailyLimit(userId: number, provider: ProviderType): Promise<number> {
