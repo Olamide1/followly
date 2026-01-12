@@ -80,26 +80,6 @@ export class RoutingService {
     return result.rows;
   }
 
-  private async getProviderDailyLimit(userId: number, provider: ProviderType): Promise<number> {
-    const result = await pool.query(
-      'SELECT daily_limit FROM provider_configs WHERE user_id = $1 AND provider = $2',
-      [userId, provider]
-    );
-    
-    if (result.rows.length > 0 && result.rows[0].daily_limit > 0) {
-      return result.rows[0].daily_limit;
-    }
-
-    // Default limits
-    const defaults: Record<ProviderType, number> = {
-      brevo: 10000,
-      mailjet: 6000,
-      resend: 50000,
-    };
-
-    return defaults[provider] || 1000;
-  }
-
   async recordProviderUsage(
     userId: number,
     provider: ProviderType,
