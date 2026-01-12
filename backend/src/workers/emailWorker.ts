@@ -1,7 +1,7 @@
 import { Job } from 'bull';
 import { pool } from '../database/connection';
 import { RoutingService } from '../services/routing';
-import { EmailProviderService, ProviderConfig } from '../services/providers';
+import { EmailProviderService, ProviderConfig, ProviderType } from '../services/providers';
 import { WarmupService } from '../services/warmup';
 import {
   generateTrackingToken,
@@ -99,6 +99,12 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
       console.error(`Failed to load ${config.provider} provider for user ${userId}:`, error.message);
       // Continue loading other providers even if one fails
     }
+  }
+
+  // Verify at least one provider was successfully loaded
+  const loadedProviders = ['brevo', 'mailjet', 'resend'].filter(p => providerService.hasProvider(p as ProviderType));
+  if (loadedProviders.length === 0) {
+    throw new Error(`No email providers could be loaded for user ${userId}. All providers failed to initialize.`);
   }
 
   // Cache the service for this user

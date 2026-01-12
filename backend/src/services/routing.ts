@@ -119,12 +119,10 @@ export class RoutingService {
     const redis = this.getRedis();
     const today = new Date().toISOString().split('T')[0];
     const countKey = `provider:${userId}:${provider}:${today}:count`;
-    const errorKey = `provider:${userId}:${provider}:errors:${Date.now() - 3600000}`;
 
-    // Batch Redis calls with multi/pipeline
-    const [count, errorCount, dailyLimit] = await Promise.all([
+    // Batch Redis calls
+    const [count, dailyLimit] = await Promise.all([
       redis.get(countKey),
-      redis.get(errorKey),
       this.getProviderDailyLimit(userId, provider),
     ]);
 
@@ -133,10 +131,8 @@ export class RoutingService {
       return false;
     }
 
-    // Check error rate (last hour)
-    if (errorCount && parseInt(errorCount) > 10) {
-      return false;
-    }
+    // Note: Error rate checking is temporarily disabled due to bug in error key logic
+    // TODO: Implement proper error rate checking using Redis SCAN or sorted sets
 
     return true;
   }

@@ -324,8 +324,8 @@ router.post('/forgot-password', async (req: Request, res: Response, next: NextFu
         to: user.email,
         subject: 'Reset Your Password - Followly',
         htmlContent: emailContent,
-        fromEmail: process.env.DEFAULT_FROM_EMAIL,
-        fromName: process.env.DEFAULT_FROM_NAME || 'Followly',
+        fromEmail: config.from_email || process.env.DEFAULT_FROM_EMAIL || '',
+        fromName: config.from_name || process.env.DEFAULT_FROM_NAME || 'Followly',
       });
     } catch (emailError: any) {
       // If email sending fails, clear the token and return error
