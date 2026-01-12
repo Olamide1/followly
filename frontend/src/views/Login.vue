@@ -36,6 +36,10 @@
             />
           </div>
           
+          <div v-if="successMessage" class="text-green-700 text-sm border-l-2 border-green-600 pl-4 mb-4">
+            {{ successMessage }}
+          </div>
+          
           <div v-if="error" class="text-ink-700 text-sm border-l-2 border-ink-900 pl-4">
             {{ error }}
           </div>
@@ -49,13 +53,20 @@
           </button>
         </form>
         
-        <div class="mt-8 pt-8 border-t border-grid-light text-center">
-          <p class="text-xs text-ink-600 tracking-wide">
-            Don't have an account?
-            <router-link to="/register" class="text-ink-900 hover:underline">
-              Sign up
+        <div class="mt-8 pt-8 border-t border-grid-light space-y-4">
+          <div class="text-center">
+            <router-link to="/forgot-password" class="text-xs text-ink-600 hover:text-ink-900 hover:underline">
+              Forgot your password?
             </router-link>
-          </p>
+          </div>
+          <div class="text-center">
+            <p class="text-xs text-ink-600 tracking-wide">
+              Don't have an account?
+              <router-link to="/register" class="text-ink-900 hover:underline">
+                Sign up
+              </router-link>
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -63,21 +74,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const email = ref('')
 const password = ref('')
 const loading = ref(false)
 const error = ref('')
+const successMessage = ref('')
+
+onMounted(() => {
+  // Check if redirected from password reset
+  if (route.query.reset === 'success') {
+    successMessage.value = 'Password reset successfully! You can now sign in with your new password.'
+  }
+})
 
 async function handleLogin() {
   loading.value = true
   error.value = ''
+  successMessage.value = ''
   
   try {
     await authStore.login(email.value, password.value)

@@ -82,6 +82,7 @@ async function runMigrations(): Promise<void> {
       createTrackingTokensTable,
       addUserFooterSettings,
       addEmailEventsProviderEventIdIndex,
+      addPasswordResetFields,
     ];
     
     for (const migration of migrations) {
@@ -551,6 +552,20 @@ async function addEmailEventsProviderEventIdIndex(client: PoolClient): Promise<v
   // Add index on provider_event_id for faster webhook lookups
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_email_events_provider_event_id ON email_events(provider_event_id)
+  `);
+}
+
+async function addPasswordResetFields(client: PoolClient): Promise<void> {
+  // Add password reset token and expiration fields to users table
+  await client.query(`
+    ALTER TABLE users 
+    ADD COLUMN IF NOT EXISTS password_reset_token VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMP
+  `);
+  
+  // Add index on password_reset_token for faster lookups
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_users_password_reset_token ON users(password_reset_token)
   `);
 }
 
