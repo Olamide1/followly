@@ -29,15 +29,22 @@ export class RoutingService {
   ): Promise<RoutingDecision> {
     // Priority order:
     // 1. User's own provider (if configured and available)
-    // 2. Default provider based on campaign type
-    // 3. Fallback to available provider
+    // 2. Any provider that's loaded in providerService
+    // 3. Fallback to default providers
 
-    // Check user's provider configs
+    // First, check what providers are actually loaded in the providerService
+    const availableProviders: ProviderType[] = (['brevo', 'mailjet', 'resend'] as ProviderType[]).filter(p => this.providerService.hasProvider(p));
+    
+    if (availableProviders.length === 0) {
+      throw new Error('No available email providers');
+    }
+
+    // Check user's provider configs from database
     const userProviders = await this.getUserProviders(userId);
     
-    // Try user's default provider first
+    // Try user's default provider first (if it's loaded)
     const userDefault = userProviders.find((p: any) => p.is_default && p.is_active);
-    if (userDefault) {
+    if (userDefault && availableProviders.includes(userDefault.provider as ProviderType)) {
       const available = await this.checkProviderAvailability(userId, userDefault.provider);
       if (available) {
         return {
@@ -47,53 +54,42 @@ export class RoutingService {
       }
     }
 
-    // Try any active user provider
-    for (const provider of userProviders.filter((p: any) => p.is_active)) {
-      const available = await this.checkProviderAvailability(userId, provider.provider as ProviderType);
-      if (available) {
-        return {
-          provider: provider.provider as ProviderType,
-          reason: 'User configured provider',
-        };
+    // Try any active user provider (if it's loaded)
+    const activeProviders = userProviders.filter((p: any) => p.is_active);
+    for (const provider of activeProviders) {
+      if (availableProviders.includes(provider.provider as ProviderType)) {
+        const available = await this.checkProviderAvailability(userId, provider.provider as ProviderType);
+        if (available) {
+          return {
+            provider: provider.provider as ProviderType,
+            reason: 'User configured provider',
+          };
+        }
       }
     }
 
-    // Default routing based on campaign type
-    if (campaignType === 'lifecycle') {
-      // Brevo for bulk lifecycle
-      if (await this.checkProviderAvailability(userId, 'brevo')) {
-        return {
-          provider: 'brevo',
-          reason: 'Default lifecycle provider',
-        };
+    // Use first available provider (prioritize resend, then mailjet, then brevo)
+    const priorityOrder: ProviderType[] = ['resend', 'mailjet', 'brevo'];
+    for (const provider of priorityOrder) {
+      if (availableProviders.includes(provider)) {
+        const available = await this.checkProviderAvailability(userId, provider);
+        if (available) {
+          return {
+            provider,
+            reason: 'Available provider',
+          };
+        }
       }
     }
 
-    // Mailjet for overflow
-    if (await this.checkProviderAvailability(userId, 'mailjet')) {
+    // Final fallback - use first available provider
+    const firstAvailable = availableProviders[0];
+    const available = await this.checkProviderAvailability(userId, firstAvailable);
+    if (available) {
       return {
-        provider: 'mailjet',
-        reason: 'Overflow provider',
+        provider: firstAvailable,
+        reason: 'Fallback provider',
       };
-    }
-
-    // Resend for reliability
-    if (await this.checkProviderAvailability(userId, 'resend')) {
-      return {
-        provider: 'resend',
-        reason: 'Reliability provider',
-      };
-    }
-
-    // Fallback to any available
-    const availableProviders: ProviderType[] = ['brevo', 'mailjet', 'resend'];
-    for (const provider of availableProviders) {
-      if (await this.checkProviderAvailability(userId, provider)) {
-        return {
-          provider,
-          reason: 'Fallback provider',
-        };
-      }
     }
 
     throw new Error('No available email providers');
@@ -104,6 +100,7 @@ export class RoutingService {
       'SELECT * FROM provider_configs WHERE user_id = $1 ORDER BY is_default DESC, created_at ASC',
       [userId]
     );
+    console.log(`Database providers for user ${userId}:`, result.rows.map((r: any) => ({ provider: r.provider, is_active: r.is_active, is_default: r.is_default })));
     return result.rows;
   }
 
