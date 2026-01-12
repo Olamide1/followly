@@ -25,7 +25,7 @@ export class RoutingService {
 
   async selectProvider(
     userId: number,
-    campaignType: 'broadcast' | 'lifecycle' = 'lifecycle'
+    _campaignType: 'broadcast' | 'lifecycle' = 'lifecycle'
   ): Promise<RoutingDecision> {
     // Priority order:
     // 1. User's own provider (if configured and available)
