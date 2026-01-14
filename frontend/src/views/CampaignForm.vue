@@ -583,36 +583,74 @@ function handlePaste(e: ClipboardEvent) {
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string
       if (dataUrl && editorDiv.value) {
-        // Get fresh selection/range - the original range may be stale
-        const currentSelection = window.getSelection()
-        if (currentSelection && currentSelection.rangeCount > 0) {
-          const currentRange = currentSelection.getRangeAt(0)
-          const img = document.createElement('img')
-          img.src = dataUrl
-          img.style.maxWidth = '100%'
-          img.style.height = 'auto'
-          img.style.display = 'block'
-          img.style.marginTop = '1rem'
-          img.style.marginBottom = '1rem'
+        // Compress and resize image to keep it small
+        const img = new Image()
+        img.onload = () => {
+          // Create canvas to resize/compress
+          const canvas = document.createElement('canvas')
+          const maxWidth = 600 // Max width for email compatibility
+          const maxHeight = 400 // Max height for email compatibility
+          const quality = 0.7 // Compression quality (0.7 = 70% quality, good balance)
           
-          currentRange.insertNode(img)
-          currentRange.setStartAfter(img)
-          currentRange.collapse(true)
-          currentSelection.removeAllRanges()
-          currentSelection.addRange(currentRange)
-          updateContentFromEditor()
-        } else {
-          // Fallback: insert at end of editor
-          const img = document.createElement('img')
-          img.src = dataUrl
-          img.style.maxWidth = '100%'
-          img.style.height = 'auto'
-          img.style.display = 'block'
-          img.style.marginTop = '1rem'
-          img.style.marginBottom = '1rem'
-          editorDiv.value.appendChild(img)
-          updateContentFromEditor()
+          let width = img.width
+          let height = img.height
+          
+          // Calculate new dimensions while maintaining aspect ratio
+          if (width > maxWidth) {
+            height = (height * maxWidth) / width
+            width = maxWidth
+          }
+          if (height > maxHeight) {
+            width = (width * maxHeight) / height
+            height = maxHeight
+          }
+          
+          canvas.width = width
+          canvas.height = height
+          
+          // Draw and compress
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height)
+            
+            // Convert to compressed base64
+            const compressedDataUrl = canvas.toDataURL('image/jpeg', quality)
+            
+            // Get fresh selection/range - the original range may be stale
+            const currentSelection = window.getSelection()
+            if (currentSelection && currentSelection.rangeCount > 0) {
+              const currentRange = currentSelection.getRangeAt(0)
+              const imgElement = document.createElement('img')
+              imgElement.src = compressedDataUrl
+              imgElement.style.maxWidth = '300px' // Small display in editor
+              imgElement.style.height = 'auto'
+              imgElement.style.display = 'block'
+              imgElement.style.marginTop = '0.5rem'
+              imgElement.style.marginBottom = '0.5rem'
+              imgElement.style.borderRadius = '4px'
+              
+              currentRange.insertNode(imgElement)
+              currentRange.setStartAfter(imgElement)
+              currentRange.collapse(true)
+              currentSelection.removeAllRanges()
+              currentSelection.addRange(currentRange)
+              updateContentFromEditor()
+            } else if (editorDiv.value) {
+              // Fallback: insert at end of editor
+              const imgElement = document.createElement('img')
+              imgElement.src = compressedDataUrl
+              imgElement.style.maxWidth = '300px' // Small display in editor
+              imgElement.style.height = 'auto'
+              imgElement.style.display = 'block'
+              imgElement.style.marginTop = '0.5rem'
+              imgElement.style.marginBottom = '0.5rem'
+              imgElement.style.borderRadius = '4px'
+              editorDiv.value.appendChild(imgElement)
+              updateContentFromEditor()
+            }
+          }
         }
+        img.src = dataUrl
       }
     }
     reader.readAsDataURL(imageFile)
