@@ -555,32 +555,104 @@ function handlePaste(e: ClipboardEvent) {
   const range = selection.getRangeAt(0)
   range.deleteContents()
 
-  // Try to get HTML first (preserves formatting)
-  let html = e.clipboardData?.getData('text/html') || ''
-  const plainText = e.clipboardData?.getData('text/plain') || ''
+  // Check for image files in clipboard
+  const items = e.clipboardData?.items
+  let imageFile: File | null = null
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.type.indexOf('image') !== -1) {
+        const file = item.getAsFile()
+        if (file) {
+          imageFile = file
+          break // Only process first image
+        }
+      }
+    }
+  }
 
+  // Check for HTML/text content (read before processing image)
+  const html = e.clipboardData?.getData('text/html') || ''
+  const plainText = e.clipboardData?.getData('text/plain') || ''
+  const hasTextContent = (html && html.trim()) || plainText
+
+  // If image exists and no text content, process image only
+  // (If both exist, prefer text as it's more reliable than async image processing)
+  if (imageFile && !hasTextContent) {
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string
+      if (dataUrl && editorDiv.value) {
+        // Get fresh selection/range - the original range may be stale
+        const currentSelection = window.getSelection()
+        if (currentSelection && currentSelection.rangeCount > 0) {
+          const currentRange = currentSelection.getRangeAt(0)
+          const img = document.createElement('img')
+          img.src = dataUrl
+          img.style.maxWidth = '100%'
+          img.style.height = 'auto'
+          img.style.display = 'block'
+          img.style.marginTop = '1rem'
+          img.style.marginBottom = '1rem'
+          
+          currentRange.insertNode(img)
+          currentRange.setStartAfter(img)
+          currentRange.collapse(true)
+          currentSelection.removeAllRanges()
+          currentSelection.addRange(currentRange)
+          updateContentFromEditor()
+        } else {
+          // Fallback: insert at end of editor
+          const img = document.createElement('img')
+          img.src = dataUrl
+          img.style.maxWidth = '100%'
+          img.style.height = 'auto'
+          img.style.display = 'block'
+          img.style.marginTop = '1rem'
+          img.style.marginBottom = '1rem'
+          editorDiv.value.appendChild(img)
+          updateContentFromEditor()
+        }
+      }
+    }
+    reader.readAsDataURL(imageFile)
+    return // Only return early if processing image and no text content exists
+  }
+
+  // Try to get HTML first (preserves formatting)
   if (html && html.trim()) {
     // Sanitize the HTML to remove dangerous content
-    html = sanitizeHtml(html)
+    const sanitizedHtml = sanitizeHtml(html)
     
     // Create a temporary container to parse the HTML
     const tempDiv = document.createElement('div')
-    tempDiv.innerHTML = html
+    tempDiv.innerHTML = sanitizedHtml
 
     // Convert to document fragment for safe insertion
     const fragment = document.createDocumentFragment()
+    let lastNode: Node | null = null
     while (tempDiv.firstChild) {
-      fragment.appendChild(tempDiv.firstChild)
+      const node = tempDiv.firstChild
+      fragment.appendChild(node)
+      lastNode = node // Save reference to last node before insertion
     }
 
-    // Insert the fragment
+    // Insert the fragment (this moves all children from fragment to DOM, leaving fragment empty)
     range.insertNode(fragment)
 
     // Move cursor to end of inserted content
-    range.setStartAfter(fragment.lastChild || fragment)
-    range.collapse(false)
-    selection.removeAllRanges()
-    selection.addRange(range)
+    // Use the saved reference to lastNode since fragment is now empty
+    if (lastNode) {
+      const newRange = document.createRange()
+      newRange.setStartAfter(lastNode)
+      newRange.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(newRange)
+    } else {
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
   } else if (plainText) {
     // Fallback to plain text if no HTML available
     // Preserve line breaks by converting \n to paragraphs
