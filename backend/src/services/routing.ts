@@ -96,7 +96,10 @@ export class RoutingService {
         .expire(key, 86400)
         .exec();
     } else {
-      const errorKey = `provider:${userId}:${provider}:errors:${Date.now()}`;
+      // Use a single error counter key per hour (not per error) to prevent key explosion
+      const now = new Date();
+      const hour = now.toISOString().split(':')[0]; // Format: YYYY-MM-DDTHH
+      const errorKey = `provider:${userId}:${provider}:errors:${hour}`;
       await redis.multi()
         .incr(errorKey)
         .expire(errorKey, 3600)
