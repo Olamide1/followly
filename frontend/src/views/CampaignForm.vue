@@ -151,6 +151,7 @@
               contenteditable="true"
               @input="updateContentFromEditor"
               @paste="handlePaste"
+              @keydown="handleEditorKeydown"
               @blur="updateContentFromEditor"
               class="wysiwyg-editor input min-h-[300px] p-4 text-sm font-normal focus:outline-none focus:ring-1 focus:ring-ink-900"
               style="font-family: inherit;"
@@ -727,6 +728,51 @@ function handlePaste(e: ClipboardEvent) {
   }
   
   updateContentFromEditor()
+}
+
+function handleEditorKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Backspace' && e.key !== 'Delete') return
+
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return
+
+  const range = selection.getRangeAt(0)
+  const container = range.startContainer
+  const offset = range.startOffset
+
+  // If an image node is directly selected, delete it
+  if (!range.collapsed) {
+    const fragment = range.cloneContents()
+    if (fragment.querySelector && fragment.querySelector('img')) {
+      e.preventDefault()
+      range.deleteContents()
+      updateContentFromEditor()
+    }
+    return
+  }
+
+  if (container.nodeType === Node.ELEMENT_NODE) {
+    const element = container as Element
+    const children = element.childNodes
+
+    if (e.key === 'Backspace' && offset > 0) {
+      const prevNode = children[offset - 1]
+      if (prevNode && prevNode.nodeName === 'IMG') {
+        e.preventDefault()
+        prevNode.remove()
+        updateContentFromEditor()
+      }
+    }
+
+    if (e.key === 'Delete' && offset < children.length) {
+      const nextNode = children[offset]
+      if (nextNode && nextNode.nodeName === 'IMG') {
+        e.preventDefault()
+        nextNode.remove()
+        updateContentFromEditor()
+      }
+    }
+  }
 }
 
 // Execute command on editor
