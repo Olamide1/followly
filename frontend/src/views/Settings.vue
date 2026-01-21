@@ -15,7 +15,7 @@
         <div v-if="providers.length === 0" class="border-l-2 border-ink-900 pl-6 mb-8">
           <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-4">No Providers Configured</h3>
           <p class="text-ink-700 leading-relaxed mb-6">
-            Add an email provider to start sending campaigns. You can configure Brevo, Mailjet, or Resend.
+            Add an email provider to start sending campaigns. You can configure Brevo, Mailjet, Resend, or your own SMTP server with DKIM.
           </p>
         </div>
         
@@ -39,6 +39,10 @@
                 </div>
                 <div v-if="provider.from_email" class="text-xs text-ink-600 mb-1">
                   From: {{ provider.from_email }}
+                </div>
+                <div v-if="provider.provider === 'nodemailer' && provider.smtp_host" class="text-xs text-ink-600 mb-1">
+                  SMTP: {{ provider.smtp_host }}:{{ provider.smtp_port }}
+                  <span v-if="provider.dkim_domain" class="ml-2 text-green-600">(DKIM enabled)</span>
                 </div>
                 <div v-if="!provider.is_active" class="text-xs text-ink-500 italic mt-1">
                   This provider is inactive and won't be used for sending emails. Click "Reactivate" to enable it.
@@ -165,6 +169,37 @@
               </div>
             </div>
 
+            <!-- SMTP/Nodemailer Guide -->
+            <div class="mb-8">
+              <h3 class="text-sm font-normal text-ink-900 uppercase tracking-wider mb-4">SMTP Server (Nodemailer) - Unlimited Sending</h3>
+              <p class="text-ink-700 text-sm leading-relaxed mb-4">
+                Use your own SMTP server for <strong>unlimited email sending</strong> with full control over deliverability. This is the recommended option if you have your own email server with DKIM set up.
+              </p>
+              <ol class="list-decimal list-inside space-y-3 text-ink-700 text-sm leading-relaxed">
+                <li>Get your SMTP credentials from your email hosting provider:
+                  <ul class="list-disc list-inside ml-4 mt-2 space-y-1">
+                    <li><strong>SMTP Host:</strong> e.g., <code class="bg-ink-100 px-1 rounded">mail.yourdomain.com</code> or <code class="bg-ink-100 px-1 rounded">smtp.gmail.com</code></li>
+                    <li><strong>SMTP Port:</strong> Common ports are <code class="bg-ink-100 px-1 rounded">465</code> (SSL), <code class="bg-ink-100 px-1 rounded">587</code> (TLS), or <code class="bg-ink-100 px-1 rounded">25</code></li>
+                    <li><strong>Username:</strong> Usually your full email address</li>
+                    <li><strong>Password:</strong> Your email password or app-specific password</li>
+                  </ul>
+                </li>
+                <li>For better inbox placement, add DKIM credentials:
+                  <ul class="list-disc list-inside ml-4 mt-2 space-y-1">
+                    <li><strong>DKIM Domain:</strong> Your sending domain (e.g., <code class="bg-ink-100 px-1 rounded">yourdomain.com</code>)</li>
+                    <li><strong>DKIM Selector:</strong> Usually <code class="bg-ink-100 px-1 rounded">default</code> or <code class="bg-ink-100 px-1 rounded">mail</code></li>
+                    <li><strong>DKIM Private Key:</strong> Your private key (PEM format, starting with <code class="bg-ink-100 px-1 rounded">-----BEGIN RSA PRIVATE KEY-----</code>)</li>
+                  </ul>
+                </li>
+                <li>Fill in all the fields below and click "Add Provider"</li>
+              </ol>
+              <div class="mt-4 p-4 bg-ink-50 border-l-2 border-ink-900">
+                <p class="text-xs text-ink-600 mb-2"><strong>Benefits of SMTP:</strong> No daily sending limits, full control over your email reputation, and emails are sent directly from your domain.</p>
+                <p class="text-xs text-ink-600 mb-2"><strong>DKIM Importance:</strong> DKIM signing greatly improves inbox placement. Without it, your emails may land in spam folders.</p>
+                <p class="text-xs text-ink-600"><strong>Security Note:</strong> Your SMTP password and DKIM private key are encrypted and stored securely. They are never exposed in API responses.</p>
+              </div>
+            </div>
+
             <!-- Field Explanations -->
             <div class="mt-8 pt-6 border-t border-grid-light">
               <h3 class="text-sm font-normal text-ink-900 uppercase tracking-wider mb-4">Field Explanations</h3>
@@ -207,22 +242,147 @@
               <option value="brevo">Brevo</option>
               <option value="mailjet">Mailjet</option>
               <option value="resend">Resend</option>
+              <option value="nodemailer">SMTP Server (Unlimited)</option>
             </select>
           </div>
 
-          <div>
-            <label for="api_key" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
-              API Key
-            </label>
-            <input id="api_key" v-model="providerForm.api_key" type="text" required class="input" />
-          </div>
+          <!-- API-based providers (Brevo, Mailjet, Resend) -->
+          <template v-if="providerForm.provider && providerForm.provider !== 'nodemailer'">
+            <div>
+              <label for="api_key" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                API Key
+              </label>
+              <input id="api_key" v-model="providerForm.api_key" type="text" required class="input" />
+            </div>
 
-          <div v-if="providerForm.provider === 'mailjet'">
-            <label for="api_secret" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
-              API Secret
-            </label>
-            <input id="api_secret" v-model="providerForm.api_secret" type="text" class="input" />
-          </div>
+            <div v-if="providerForm.provider === 'mailjet'">
+              <label for="api_secret" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                API Secret
+              </label>
+              <input id="api_secret" v-model="providerForm.api_secret" type="text" class="input" />
+            </div>
+          </template>
+
+          <!-- SMTP/Nodemailer configuration -->
+          <template v-if="providerForm.provider === 'nodemailer'">
+            <div class="border-l-2 border-ink-300 pl-6 space-y-6">
+              <h3 class="text-xs font-normal text-ink-500 uppercase tracking-wider">SMTP Connection</h3>
+              
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label for="smtp_host" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                    SMTP Host *
+                  </label>
+                  <input 
+                    id="smtp_host" 
+                    v-model="providerForm.smtp_host" 
+                    type="text" 
+                    required 
+                    placeholder="mail.yourdomain.com"
+                    class="input" 
+                  />
+                </div>
+                <div>
+                  <label for="smtp_port" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                    SMTP Port *
+                  </label>
+                  <input 
+                    id="smtp_port" 
+                    v-model.number="providerForm.smtp_port" 
+                    type="number" 
+                    required 
+                    placeholder="465"
+                    class="input" 
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label class="flex items-center">
+                  <input
+                    v-model="providerForm.smtp_secure"
+                    type="checkbox"
+                    class="mr-3"
+                  />
+                  <span class="text-xs text-ink-600 uppercase tracking-wider">Use SSL/TLS (check for port 465, uncheck for 587)</span>
+                </label>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label for="smtp_user" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                    Username *
+                  </label>
+                  <input 
+                    id="smtp_user" 
+                    v-model="providerForm.smtp_user" 
+                    type="text" 
+                    required 
+                    placeholder="you@yourdomain.com"
+                    class="input" 
+                  />
+                </div>
+                <div>
+                  <label for="smtp_pass" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                    Password *
+                  </label>
+                  <input 
+                    id="smtp_pass" 
+                    v-model="providerForm.smtp_pass" 
+                    type="password" 
+                    required 
+                    placeholder="Your email password"
+                    class="input" 
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div class="border-l-2 border-green-300 pl-6 space-y-6">
+              <h3 class="text-xs font-normal text-ink-500 uppercase tracking-wider">DKIM Configuration (Optional but Recommended)</h3>
+              <p class="text-xs text-ink-600">DKIM signing helps your emails land in the inbox instead of spam.</p>
+              
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label for="dkim_domain" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                    DKIM Domain
+                  </label>
+                  <input 
+                    id="dkim_domain" 
+                    v-model="providerForm.dkim_domain" 
+                    type="text" 
+                    placeholder="yourdomain.com"
+                    class="input" 
+                  />
+                </div>
+                <div>
+                  <label for="dkim_selector" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                    DKIM Selector
+                  </label>
+                  <input 
+                    id="dkim_selector" 
+                    v-model="providerForm.dkim_selector" 
+                    type="text" 
+                    placeholder="default"
+                    class="input" 
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label for="dkim_private_key" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                  DKIM Private Key (PEM format)
+                </label>
+                <textarea 
+                  id="dkim_private_key" 
+                  v-model="providerForm.dkim_private_key" 
+                  rows="4"
+                  placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
+                  class="input font-mono text-xs"
+                ></textarea>
+              </div>
+            </div>
+          </template>
 
           <div>
             <label for="from_email" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
@@ -231,7 +391,7 @@
             <input id="from_email" v-model="providerForm.from_email" type="email" class="input" />
           </div>
 
-          <div>
+          <div v-if="providerForm.provider !== 'nodemailer'">
             <label for="daily_limit" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
               Daily Limit
             </label>
@@ -319,6 +479,15 @@ const providerForm = ref({
   from_email: '',
   daily_limit: 0,
   is_default: false,
+  // Nodemailer/SMTP fields
+  smtp_host: '',
+  smtp_port: 465,
+  smtp_secure: true,
+  smtp_user: '',
+  smtp_pass: '',
+  dkim_domain: '',
+  dkim_selector: 'default',
+  dkim_private_key: '',
 })
 const footerForm = ref({
   custom_footer_text: '',
@@ -345,6 +514,14 @@ async function addProvider() {
       from_email: '',
       daily_limit: 0,
       is_default: false,
+      smtp_host: '',
+      smtp_port: 465,
+      smtp_secure: true,
+      smtp_user: '',
+      smtp_pass: '',
+      dkim_domain: '',
+      dkim_selector: 'default',
+      dkim_private_key: '',
     }
     loadProviders()
   } catch (error: any) {

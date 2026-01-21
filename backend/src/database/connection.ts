@@ -83,6 +83,7 @@ async function runMigrations(): Promise<void> {
       addUserFooterSettings,
       addEmailEventsProviderEventIdIndex,
       addPasswordResetFields,
+      addNodemailerProvider,
     ];
     
     for (const migration of migrations) {
@@ -566,6 +567,35 @@ async function addPasswordResetFields(client: PoolClient): Promise<void> {
   // Add index on password_reset_token for faster lookups
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_users_password_reset_token ON users(password_reset_token)
+  `);
+}
+
+async function addNodemailerProvider(client: PoolClient): Promise<void> {
+  // Add SMTP/Nodemailer-specific columns to provider_configs
+  await client.query(`
+    ALTER TABLE provider_configs 
+    ADD COLUMN IF NOT EXISTS smtp_host VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS smtp_port INTEGER,
+    ADD COLUMN IF NOT EXISTS smtp_secure BOOLEAN DEFAULT false,
+    ADD COLUMN IF NOT EXISTS smtp_user VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS smtp_pass VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS dkim_domain VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS dkim_selector VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS dkim_private_key TEXT
+  `);
+  
+  // Update the CHECK constraint to include 'nodemailer'
+  // First, drop the existing constraint
+  await client.query(`
+    ALTER TABLE provider_configs 
+    DROP CONSTRAINT IF EXISTS provider_configs_provider_check
+  `);
+  
+  // Add the new constraint with 'nodemailer' included
+  await client.query(`
+    ALTER TABLE provider_configs 
+    ADD CONSTRAINT provider_configs_provider_check 
+    CHECK (provider IN ('brevo', 'mailjet', 'resend', 'nodemailer'))
   `);
 }
 

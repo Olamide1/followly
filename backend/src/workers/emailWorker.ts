@@ -43,7 +43,7 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
   for (const config of result.rows) {
     try {
       const providerConfig: ProviderConfig = {
-        provider: config.provider as 'brevo' | 'mailjet' | 'resend',
+        provider: config.provider as 'brevo' | 'mailjet' | 'resend' | 'nodemailer',
         dailyLimit: config.daily_limit || undefined,
         isDefault: config.is_default || false,
       };
@@ -87,6 +87,34 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
           };
           break;
 
+        case 'nodemailer':
+          if (!config.smtp_host || !config.smtp_port || !config.smtp_user || !config.smtp_pass) {
+            console.warn(`Nodemailer provider for user ${userId} missing SMTP configuration, skipping`);
+            continue;
+          }
+          providerConfig.nodemailer = {
+            host: config.smtp_host,
+            port: config.smtp_port,
+            secure: config.smtp_secure || false,
+            user: config.smtp_user,
+            pass: config.smtp_pass,
+            fromEmail: config.from_email || process.env.DEFAULT_FROM_EMAIL || '',
+            fromName: config.from_name || process.env.DEFAULT_FROM_NAME,
+            // Add DKIM if configured
+            ...(config.dkim_domain && config.dkim_private_key && {
+              dkim: {
+                domainName: config.dkim_domain,
+                keySelector: config.dkim_selector || 'default',
+                privateKey: config.dkim_private_key,
+              },
+            }),
+            // Enable connection pooling for high-volume sending
+            pool: true,
+            maxConnections: 5,
+            maxMessages: 100,
+          };
+          break;
+
         default:
           console.warn(`Unknown provider type: ${config.provider}, skipping`);
           continue;
@@ -102,7 +130,7 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
   }
 
   // Verify at least one provider was successfully loaded
-  const loadedProviders = ['brevo', 'mailjet', 'resend'].filter(p => providerService.hasProvider(p as ProviderType));
+  const loadedProviders = ['brevo', 'mailjet', 'resend', 'nodemailer'].filter(p => providerService.hasProvider(p as ProviderType));
   if (loadedProviders.length === 0) {
     throw new Error(`No email providers could be loaded for user ${userId}. All providers failed to initialize.`);
   }
@@ -211,7 +239,7 @@ export async function processEmailQueue(job: Job) {
     const userRoutingService = new RoutingService(providerService);
     
     // Debug: Log available providers
-    const availableProviders = ['brevo', 'mailjet', 'resend'].filter(p => providerService.hasProvider(p as ProviderType));
+    const availableProviders = ['brevo', 'mailjet', 'resend', 'nodemailer'].filter(p => providerService.hasProvider(p as ProviderType));
     console.log(`Available providers for user ${userId}:`, availableProviders);
     
     const routingDecision = await userRoutingService.selectProvider(userId, campaignType);

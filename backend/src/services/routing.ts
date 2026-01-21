@@ -33,7 +33,7 @@ export class RoutingService {
     // 3. Fallback to default providers
 
     // First, check what providers are actually loaded in the providerService
-    const availableProviders: ProviderType[] = (['brevo', 'mailjet', 'resend'] as ProviderType[]).filter(p => this.providerService.hasProvider(p));
+    const availableProviders: ProviderType[] = (['brevo', 'mailjet', 'resend', 'nodemailer'] as ProviderType[]).filter(p => this.providerService.hasProvider(p));
     
     if (availableProviders.length === 0) {
       throw new Error('No available email providers');

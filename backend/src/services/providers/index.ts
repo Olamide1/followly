@@ -1,14 +1,16 @@
 import { BrevoProvider, BrevoConfig } from './brevo';
 import { MailjetProvider, MailjetConfig } from './mailjet';
 import { ResendProvider, ResendConfig } from './resend';
+import { NodemailerProvider, NodemailerConfig } from './nodemailer';
 
-export type ProviderType = 'brevo' | 'mailjet' | 'resend';
+export type ProviderType = 'brevo' | 'mailjet' | 'resend' | 'nodemailer';
 
 export interface ProviderConfig {
   provider: ProviderType;
   brevo?: BrevoConfig;
   mailjet?: MailjetConfig;
   resend?: ResendConfig;
+  nodemailer?: NodemailerConfig;
   dailyLimit?: number;
   isDefault?: boolean;
 }
@@ -22,11 +24,11 @@ export interface SendEmailParams {
 }
 
 export class EmailProviderService {
-  private providers: Map<ProviderType, BrevoProvider | MailjetProvider | ResendProvider> = new Map();
+  private providers: Map<ProviderType, BrevoProvider | MailjetProvider | ResendProvider | NodemailerProvider> = new Map();
   private defaultProvider: ProviderType = 'brevo';
 
   addProvider(config: ProviderConfig): void {
-    let provider: BrevoProvider | MailjetProvider | ResendProvider;
+    let provider: BrevoProvider | MailjetProvider | ResendProvider | NodemailerProvider;
 
     switch (config.provider) {
       case 'brevo':
@@ -46,6 +48,12 @@ export class EmailProviderService {
           throw new Error('Resend config required');
         }
         provider = new ResendProvider(config.resend);
+        break;
+      case 'nodemailer':
+        if (!config.nodemailer) {
+          throw new Error('Nodemailer config required');
+        }
+        provider = new NodemailerProvider(config.nodemailer);
         break;
       default:
         throw new Error(`Unknown provider: ${config.provider}`);
@@ -72,7 +80,7 @@ export class EmailProviderService {
     return emailProvider.sendEmail(params);
   }
 
-  getProvider(providerType: ProviderType): BrevoProvider | MailjetProvider | ResendProvider | undefined {
+  getProvider(providerType: ProviderType): BrevoProvider | MailjetProvider | ResendProvider | NodemailerProvider | undefined {
     return this.providers.get(providerType);
   }
 

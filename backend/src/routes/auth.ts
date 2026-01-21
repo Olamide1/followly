@@ -248,7 +248,7 @@ router.post('/forgot-password', async (req: Request, res: Response, next: NextFu
     
     const config = providerConfigs.rows[0];
     const providerConfig: any = {
-      provider: config.provider as 'brevo' | 'mailjet' | 'resend',
+      provider: config.provider as 'brevo' | 'mailjet' | 'resend' | 'nodemailer',
       isDefault: true,
     };
     
@@ -273,6 +273,24 @@ router.post('/forgot-password', async (req: Request, res: Response, next: NextFu
           apiKey: config.api_key,
           fromEmail: config.from_email || process.env.DEFAULT_FROM_EMAIL || '',
           fromName: config.from_name || process.env.DEFAULT_FROM_NAME,
+        };
+        break;
+      case 'nodemailer':
+        providerConfig.nodemailer = {
+          host: config.smtp_host,
+          port: config.smtp_port,
+          secure: config.smtp_secure || false,
+          user: config.smtp_user,
+          pass: config.smtp_pass,
+          fromEmail: config.from_email || process.env.DEFAULT_FROM_EMAIL || '',
+          fromName: config.from_name || process.env.DEFAULT_FROM_NAME,
+          ...(config.dkim_domain && config.dkim_private_key && {
+            dkim: {
+              domainName: config.dkim_domain,
+              keySelector: config.dkim_selector || 'default',
+              privateKey: config.dkim_private_key,
+            },
+          }),
         };
         break;
     }

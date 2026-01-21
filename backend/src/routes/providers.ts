@@ -10,15 +10,19 @@ router.use(authenticateToken);
 router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      'SELECT id, provider, from_email, from_name, daily_limit, is_active, is_default, created_at, updated_at FROM provider_configs WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC',
+      `SELECT id, provider, from_email, from_name, daily_limit, is_active, is_default, created_at, updated_at,
+       smtp_host, smtp_port, smtp_secure, smtp_user, dkim_domain, dkim_selector
+       FROM provider_configs WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC`,
       [req.userId]
     );
 
-    // Don't send API keys
+    // Don't send API keys and sensitive SMTP fields
     const configs = result.rows.map((row: any) => ({
       ...row,
       api_key: undefined,
       api_secret: undefined,
+      smtp_pass: undefined,
+      dkim_private_key: undefined,
     }));
 
     res.json({ configs });
@@ -30,10 +34,34 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
 // Create/update provider config
 router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { provider, api_key, api_secret, from_email, from_name, daily_limit, is_default } = req.body;
+    const { 
+      provider, 
+      api_key, 
+      api_secret, 
+      from_email, 
+      from_name, 
+      daily_limit, 
+      is_default,
+      // Nodemailer/SMTP specific fields
+      smtp_host,
+      smtp_port,
+      smtp_secure,
+      smtp_user,
+      smtp_pass,
+      dkim_domain,
+      dkim_selector,
+      dkim_private_key,
+    } = req.body;
 
-    if (!provider || !['brevo', 'mailjet', 'resend'].includes(provider)) {
+    if (!provider || !['brevo', 'mailjet', 'resend', 'nodemailer'].includes(provider)) {
       throw createError('Invalid provider', 400);
+    }
+
+    // Validate nodemailer-specific required fields
+    if (provider === 'nodemailer') {
+      if (!smtp_host || !smtp_port || !smtp_user || !smtp_pass) {
+        throw createError('SMTP host, port, user, and password are required for nodemailer', 400);
+      }
     }
 
     // Check if config exists
@@ -81,6 +109,41 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
           );
         }
       }
+
+      // Nodemailer/SMTP specific fields
+      if (smtp_host !== undefined) {
+        updates.push(`smtp_host = $${paramCount++}`);
+        params.push(smtp_host);
+      }
+      if (smtp_port !== undefined) {
+        updates.push(`smtp_port = $${paramCount++}`);
+        params.push(smtp_port);
+      }
+      if (smtp_secure !== undefined) {
+        updates.push(`smtp_secure = $${paramCount++}`);
+        params.push(smtp_secure);
+      }
+      if (smtp_user !== undefined) {
+        updates.push(`smtp_user = $${paramCount++}`);
+        params.push(smtp_user);
+      }
+      if (smtp_pass !== undefined) {
+        updates.push(`smtp_pass = $${paramCount++}`);
+        params.push(smtp_pass);
+      }
+      if (dkim_domain !== undefined) {
+        updates.push(`dkim_domain = $${paramCount++}`);
+        params.push(dkim_domain);
+      }
+      if (dkim_selector !== undefined) {
+        updates.push(`dkim_selector = $${paramCount++}`);
+        params.push(dkim_selector);
+      }
+      if (dkim_private_key !== undefined) {
+        updates.push(`dkim_private_key = $${paramCount++}`);
+        params.push(dkim_private_key);
+      }
+
       // Always set is_active to true when updating (reactivate if it was inactive)
       updates.push(`is_active = true`);
 
@@ -102,17 +165,38 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
       // Create
       const result = await pool.query(
         `INSERT INTO provider_configs 
-         (user_id, provider, api_key, api_secret, from_email, from_name, daily_limit, is_default, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (user_id, provider, api_key, api_secret, from_email, from_name, daily_limit, is_default, is_active,
+          smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, dkim_domain, dkim_selector, dkim_private_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          RETURNING *`,
-        [req.userId, provider, api_key, api_secret, from_email, from_name, daily_limit || 0, is_default || false, true]
+        [
+          req.userId, 
+          provider, 
+          api_key, 
+          api_secret, 
+          from_email, 
+          from_name, 
+          daily_limit || 0, 
+          is_default || false, 
+          true,
+          smtp_host || null,
+          smtp_port || null,
+          smtp_secure || false,
+          smtp_user || null,
+          smtp_pass || null,
+          dkim_domain || null,
+          dkim_selector || null,
+          dkim_private_key || null,
+        ]
       );
       config = result.rows[0];
     }
 
-    // Don't send API keys
+    // Don't send sensitive fields
     delete config.api_key;
     delete config.api_secret;
+    delete config.smtp_pass;
+    delete config.dkim_private_key;
 
     res.json({ config });
   } catch (error: any) {
