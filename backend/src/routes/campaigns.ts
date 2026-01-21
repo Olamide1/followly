@@ -152,10 +152,40 @@ router.post('/test-send', async (req: AuthRequest, res: Response, next: NextFunc
           fromName: from_name || providerConfig.from_name || process.env.DEFAULT_FROM_NAME,
         };
         break;
+      case 'nodemailer':
+        // Validate required SMTP fields
+        if (!providerConfig.smtp_host || !providerConfig.smtp_port || !providerConfig.smtp_user || !providerConfig.smtp_pass) {
+          return res.status(400).json({ 
+            error: 'Nodemailer provider is missing required SMTP configuration. Please update your provider settings.' 
+          });
+        }
+        
+        providerConfigObj.nodemailer = {
+          host: providerConfig.smtp_host,
+          port: typeof providerConfig.smtp_port === 'string' ? parseInt(providerConfig.smtp_port, 10) : providerConfig.smtp_port,
+          secure: providerConfig.smtp_secure || false,
+          user: providerConfig.smtp_user,
+          pass: providerConfig.smtp_pass,
+          fromEmail: from_email || providerConfig.from_email || process.env.DEFAULT_FROM_EMAIL || '',
+          fromName: from_name || providerConfig.from_name || process.env.DEFAULT_FROM_NAME,
+          // Enable connection pooling
+          pool: true,
+          maxConnections: 5,
+          maxMessages: 100,
+          // Add DKIM if configured
+          ...(providerConfig.dkim_domain && providerConfig.dkim_private_key && {
+            dkim: {
+              domainName: providerConfig.dkim_domain,
+              keySelector: providerConfig.dkim_selector || 'default',
+              privateKey: providerConfig.dkim_private_key,
+            },
+          }),
+        };
+        break;
     }
 
     providerService.addProvider(providerConfigObj);
-    const provider = providerService.getProvider(providerConfig.provider as 'brevo' | 'mailjet' | 'resend');
+    const provider = providerService.getProvider(providerConfig.provider as 'brevo' | 'mailjet' | 'resend' | 'nodemailer');
 
     if (!provider) {
       return res.status(500).json({ error: 'Failed to initialize email provider' });

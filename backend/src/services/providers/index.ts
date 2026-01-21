@@ -51,7 +51,18 @@ export class EmailProviderService {
         break;
       case 'nodemailer':
         if (!config.nodemailer) {
-          throw new Error('Nodemailer config required');
+          console.error('[EmailProviderService] Nodemailer config is missing! Full config object:', JSON.stringify(config, null, 2));
+          throw new Error('Nodemailer config required. Please check that SMTP settings are properly configured.');
+        }
+        // Validate nodemailer config has required fields
+        if (!config.nodemailer.host || !config.nodemailer.port || !config.nodemailer.user || !config.nodemailer.pass) {
+          console.error('[EmailProviderService] Nodemailer config is incomplete:', {
+            has_host: !!config.nodemailer.host,
+            has_port: !!config.nodemailer.port,
+            has_user: !!config.nodemailer.user,
+            has_pass: !!config.nodemailer.pass,
+          });
+          throw new Error('Nodemailer config is incomplete. Missing required SMTP fields.');
         }
         provider = new NodemailerProvider(config.nodemailer);
         break;

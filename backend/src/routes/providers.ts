@@ -396,5 +396,49 @@ router.delete('/:id/permanent', async (req: AuthRequest, res: Response, next: Ne
   }
 });
 
+// Test endpoint to verify nodemailer provider config (for debugging)
+router.get('/test-nodemailer', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, provider, smtp_host, smtp_port, smtp_secure, smtp_user, 
+       from_email, from_name, is_active, is_default
+       FROM provider_configs 
+       WHERE user_id = $1 AND provider = 'nodemailer' 
+       ORDER BY is_default DESC, created_at DESC LIMIT 1`,
+      [req.userId]
+    );
+    
+    if (result.rows.length === 0) {
+      res.json({ 
+        error: 'No nodemailer provider found',
+        message: 'Please add a nodemailer provider in Settings first'
+      });
+      return;
+    }
+    
+    const config = result.rows[0];
+    res.json({
+      found: true,
+      config: {
+        id: config.id,
+        provider: config.provider,
+        smtp_host: config.smtp_host || 'NULL',
+        smtp_port: config.smtp_port || 'NULL',
+        smtp_secure: config.smtp_secure,
+        smtp_user: config.smtp_user || 'NULL',
+        smtp_pass: config.smtp_pass ? '***present***' : 'NULL',
+        from_email: config.from_email,
+        from_name: config.from_name,
+        is_active: config.is_active,
+        is_default: config.is_default,
+        // Check if all required fields are present
+        has_all_required: !!(config.smtp_host && config.smtp_port && config.smtp_user && config.smtp_pass),
+      }
+    });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
 export default router;
 
