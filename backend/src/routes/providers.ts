@@ -144,8 +144,12 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
         params.push(dkim_private_key);
       }
 
-      // Always set is_active to true when updating (reactivate if it was inactive)
-      updates.push(`is_active = true`);
+      // Only set is_active to true if explicitly provided, otherwise keep current state
+      // This allows updating credentials without reactivating
+      if (req.body.is_active !== undefined) {
+        updates.push(`is_active = $${paramCount++}`);
+        params.push(req.body.is_active);
+      }
 
       if (updates.length > 0) {
         updates.push(`updated_at = CURRENT_TIMESTAMP`);
@@ -157,8 +161,8 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
       }
 
       const result = await pool.query(
-        'SELECT * FROM provider_configs WHERE id = $1',
-        [existing.rows[0].id]
+        'SELECT * FROM provider_configs WHERE id = $1 AND user_id = $2',
+        [existing.rows[0].id, req.userId]
       );
       config = result.rows[0];
     } else {
@@ -222,14 +226,129 @@ router.post('/:id/reactivate', async (req: AuthRequest, res: Response, next: Nex
   }
 });
 
-// Delete provider config
+// Deactivate provider (soft delete - keeps info for reactivation)
 router.delete('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
+    const providerId = parseInt(req.params.id);
+    
+    // First, check if this is the default provider
+    const checkDefault = await pool.query(
+      'SELECT is_default FROM provider_configs WHERE id = $1 AND user_id = $2',
+      [providerId, req.userId]
+    );
+    
+    if (checkDefault.rows.length === 0) {
+      throw createError('Provider not found', 404);
+    }
+    
+    // If it's the default, we need to set another provider as default first
+    if (checkDefault.rows[0].is_default) {
+      // Find another active provider to set as default
+      const otherProvider = await pool.query(
+        'SELECT id FROM provider_configs WHERE user_id = $1 AND id != $2 AND is_active = true LIMIT 1',
+        [req.userId, providerId]
+      );
+      
+      if (otherProvider.rows.length > 0) {
+        // Set another provider as default (include user_id for security)
+        await pool.query(
+          'UPDATE provider_configs SET is_default = true WHERE id = $1 AND user_id = $2',
+          [otherProvider.rows[0].id, req.userId]
+        );
+      } else {
+        // No other active providers, just unset default (include user_id for security)
+        await pool.query(
+          'UPDATE provider_configs SET is_default = false WHERE id = $1 AND user_id = $2',
+          [providerId, req.userId]
+        );
+      }
+    }
+    
+    // Deactivate (soft delete) - keeps all info for reactivation
+    await pool.query(
+      'UPDATE provider_configs SET is_active = false, is_default = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2',
+      [providerId, req.userId]
+    );
+    
+    res.json({ success: true, message: 'Provider deactivated. You can reactivate it later.' });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Change default provider
+router.post('/:id/set-default', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const providerId = parseInt(req.params.id);
+    
+    // Verify provider exists and belongs to user
+    const checkProvider = await pool.query(
+      'SELECT id, is_active FROM provider_configs WHERE id = $1 AND user_id = $2',
+      [providerId, req.userId]
+    );
+    
+    if (checkProvider.rows.length === 0) {
+      throw createError('Provider not found', 404);
+    }
+    
+    // Unset all other defaults
+    await pool.query(
+      'UPDATE provider_configs SET is_default = false WHERE user_id = $1 AND id != $2',
+      [req.userId, providerId]
+    );
+    
+    // Set this provider as default (and reactivate if it was inactive)
+    // Include user_id check for security - prevents modifying other users' providers
+    await pool.query(
+      'UPDATE provider_configs SET is_default = true, is_active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2',
+      [providerId, req.userId]
+    );
+    
+    const result = await pool.query(
+      'SELECT id, provider, is_default, is_active FROM provider_configs WHERE id = $1 AND user_id = $2',
+      [providerId, req.userId]
+    );
+    
+    res.json({ success: true, config: result.rows[0] });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Hard delete provider (permanently remove - only for inactive providers)
+router.delete('/:id/permanent', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const providerId = parseInt(req.params.id);
+    
+    // Verify provider exists, belongs to user, and is inactive
+    const checkProvider = await pool.query(
+      'SELECT id, is_active, is_default FROM provider_configs WHERE id = $1 AND user_id = $2',
+      [providerId, req.userId]
+    );
+    
+    if (checkProvider.rows.length === 0) {
+      throw createError('Provider not found', 404);
+    }
+    
+    if (checkProvider.rows[0].is_active) {
+      throw createError('Cannot permanently delete an active provider. Deactivate it first.', 400);
+    }
+    
+    // If it was the default (even though inactive), unset it (include user_id for security)
+    if (checkProvider.rows[0].is_default) {
+      await pool.query(
+        'UPDATE provider_configs SET is_default = false WHERE id = $1 AND user_id = $2',
+        [providerId, req.userId]
+      );
+    }
+    
+    // Permanently delete
     await pool.query(
       'DELETE FROM provider_configs WHERE id = $1 AND user_id = $2',
-      [parseInt(req.params.id), req.userId]
+      [providerId, req.userId]
     );
-    res.json({ success: true });
+    
+    res.json({ success: true, message: 'Provider permanently deleted.' });
   } catch (error: any) {
     next(error);
   }

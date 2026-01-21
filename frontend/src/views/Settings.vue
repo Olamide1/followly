@@ -50,6 +50,13 @@
               </div>
               <div class="flex items-center space-x-3 ml-4">
                 <button
+                  v-if="!provider.is_default && provider.is_active"
+                  @click="setAsDefault(provider.id)"
+                  class="text-xs text-ink-600 hover:text-ink-900 uppercase tracking-wider px-3 py-1 border border-grid-medium hover:border-ink-900 transition-colors"
+                >
+                  Set as Default
+                </button>
+                <button
                   v-if="!provider.is_active"
                   @click="reactivateProvider(provider.id)"
                   class="text-xs text-ink-600 hover:text-ink-900 uppercase tracking-wider px-3 py-1 border border-grid-medium hover:border-ink-900 transition-colors"
@@ -57,10 +64,18 @@
                   Reactivate
                 </button>
                 <button
-                  @click="deleteProvider(provider.id)"
+                  v-if="provider.is_active"
+                  @click="deactivateProvider(provider.id)"
                   class="text-ink-500 hover:text-ink-900 text-xs"
                 >
-                  Remove
+                  Deactivate
+                </button>
+                <button
+                  v-if="!provider.is_active"
+                  @click="deleteProvider(provider.id)"
+                  class="text-ink-500 hover:text-red-600 text-xs"
+                >
+                  Delete
                 </button>
               </div>
             </div>
@@ -531,14 +546,44 @@ async function addProvider() {
   }
 }
 
-async function deleteProvider(id: number) {
-  if (!confirm('Are you sure you want to remove this provider?')) return
+async function deactivateProvider(id: number) {
+  if (!confirm('Are you sure you want to deactivate this provider? It will be kept for reactivation later.')) return
   
   try {
     await api.delete(`/providers/${id}`)
+    alert('Provider deactivated successfully. You can reactivate it later.')
     loadProviders()
-  } catch (error) {
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to deactivate provider'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to deactivate provider:', error)
+  }
+}
+
+async function deleteProvider(id: number) {
+  if (!confirm('Are you sure you want to permanently delete this provider? This cannot be undone and all configuration will be lost.')) return
+  
+  try {
+    // Hard delete - only works for inactive providers
+    await api.delete(`/providers/${id}/permanent`)
+    alert('Provider permanently deleted.')
+    loadProviders()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to delete provider'
+    alert(`Error: ${errorMessage}`)
     console.error('Failed to delete provider:', error)
+  }
+}
+
+async function setAsDefault(id: number) {
+  try {
+    await api.post(`/providers/${id}/set-default`)
+    alert('Default provider changed successfully!')
+    loadProviders()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to set default provider'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to set default provider:', error)
   }
 }
 
