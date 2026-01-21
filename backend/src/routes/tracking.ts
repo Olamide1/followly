@@ -154,5 +154,43 @@ router.get('/click/:token', async (req: Request, res: Response): Promise<void> =
   }
 });
 
+/**
+ * Test endpoint to verify tracking configuration
+ * GET /api/tracking/test
+ */
+router.get('/test', async (_req: Request, res: Response) => {
+  try {
+    const { getTrackingBaseUrl, getTrackingPixelUrl, getClickTrackingUrl } = await import('../services/tracking');
+    
+    const baseUrl = getTrackingBaseUrl();
+    const testToken = 'test-token-123456789012345678901234567890';
+    const testUrl = 'https://example.com/test';
+    
+    const pixelUrl = getTrackingPixelUrl(testToken);
+    const clickUrl = getClickTrackingUrl(testToken, testUrl);
+    
+    res.json({
+      success: true,
+      configuration: {
+        baseUrl,
+        nodeEnv: process.env.NODE_ENV,
+        appUrl: process.env.APP_URL || 'not set',
+        herokuAppUrl: process.env.HEROKU_APP_URL || 'not set',
+      },
+      testUrls: {
+        pixelUrl,
+        clickUrl,
+      },
+      message: 'Tracking URLs generated successfully. Check that baseUrl matches your Heroku app URL.',
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Tracking configuration error. Check APP_URL environment variable.',
+    });
+  }
+});
+
 export default router;
 

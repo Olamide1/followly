@@ -371,22 +371,47 @@ export async function processEmailQueue(job: Job) {
     }
 
     // Add tracking to email content (now we're guaranteed to have finalEmailQueueId)
+    // Wrap in try-catch so tracking failures don't break email sending
     let trackedContent = content;
     let trackingToken: string | null = null;
 
     if (finalEmailQueueId) {
-      // Generate tracking token
-      trackingToken = generateTrackingToken(finalEmailQueueId, contactId);
-      
-      // Store tracking token
-      await storeTrackingToken(finalEmailQueueId, contactId, campaignId, trackingToken);
-      
-      // Add tracking pixel
-      const pixelUrl = getTrackingPixelUrl(trackingToken);
-      trackedContent = addTrackingPixel(trackedContent, pixelUrl);
-      
-      // Wrap links with tracking
-      trackedContent = wrapLinksWithTracking(trackedContent, trackingToken);
+      try {
+        // Generate tracking token
+        trackingToken = generateTrackingToken(finalEmailQueueId, contactId);
+        
+        // Store tracking token
+        await storeTrackingToken(finalEmailQueueId, contactId, campaignId, trackingToken);
+        
+        // Add tracking pixel
+        const pixelUrl = getTrackingPixelUrl(trackingToken);
+        trackedContent = addTrackingPixel(trackedContent, pixelUrl);
+        
+        // Wrap links with tracking
+        const originalLinkCount = (trackedContent.match(/<a\s+[^>]*href\s*=/gi) || []).length;
+        trackedContent = wrapLinksWithTracking(trackedContent, trackingToken);
+        const trackedLinkCount = (trackedContent.match(/\/api\/tracking\/click\//g) || []).length;
+        
+        // Log tracking setup for debugging
+        console.log(`[Tracking] Email ${finalEmailQueueId} tracking setup:`, {
+          emailQueueId: finalEmailQueueId,
+          contactId,
+          campaignId,
+          token: trackingToken.substring(0, 8) + '...',
+          pixelUrl: pixelUrl.substring(0, 60) + '...',
+          linksFound: originalLinkCount,
+          linksTracked: trackedLinkCount,
+          hasTrackingPixel: trackedContent.includes(pixelUrl),
+        });
+      } catch (trackingError: any) {
+        // Log error but continue with untracked content - don't break email sending
+        console.error(`[Tracking] Failed to add tracking to email ${finalEmailQueueId}:`, trackingError.message);
+        console.error(`[Tracking] Email will be sent without tracking. Error:`, trackingError);
+        // Use original content without tracking
+        trackedContent = content;
+      }
+    } else {
+      console.warn(`[Tracking] WARNING: No emailQueueId available for tracking - email to ${toEmail} will not be tracked!`);
     }
 
     // Send email with tracked content

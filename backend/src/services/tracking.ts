@@ -34,7 +34,7 @@ export function generateTrackingToken(emailQueueId: number, contactId: number): 
 /**
  * Get the base URL for tracking endpoints (backend API URL)
  */
-function getTrackingBaseUrl(): string {
+export function getTrackingBaseUrl(): string {
   // In production, use the Heroku app URL or APP_URL env var
   if (process.env.NODE_ENV === 'production') {
     return process.env.APP_URL || process.env.HEROKU_APP_URL || 'https://followly-1a83c23a0be1.herokuapp.com';
@@ -48,7 +48,21 @@ function getTrackingBaseUrl(): string {
  */
 export function getTrackingPixelUrl(token: string): string {
   const baseUrl = getTrackingBaseUrl();
-  return `${baseUrl}/api/tracking/pixel/${token}`;
+  if (!baseUrl) {
+    console.error('[Tracking] ERROR: Tracking base URL is not configured! Set APP_URL environment variable.');
+    throw new Error('Tracking base URL not configured');
+  }
+  const pixelUrl = `${baseUrl}/api/tracking/pixel/${token}`;
+  
+  // Validate URL format
+  try {
+    new URL(pixelUrl);
+  } catch (error) {
+    console.error('[Tracking] ERROR: Invalid tracking pixel URL generated:', pixelUrl);
+    throw new Error('Invalid tracking pixel URL');
+  }
+  
+  return pixelUrl;
 }
 
 /**
@@ -56,8 +70,22 @@ export function getTrackingPixelUrl(token: string): string {
  */
 export function getClickTrackingUrl(token: string, originalUrl: string): string {
   const baseUrl = getTrackingBaseUrl();
+  if (!baseUrl) {
+    console.error('[Tracking] ERROR: Tracking base URL is not configured! Set APP_URL environment variable.');
+    throw new Error('Tracking base URL not configured');
+  }
   const encodedUrl = encodeURIComponent(originalUrl);
-  return `${baseUrl}/api/tracking/click/${token}?url=${encodedUrl}`;
+  const clickUrl = `${baseUrl}/api/tracking/click/${token}?url=${encodedUrl}`;
+  
+  // Validate URL format
+  try {
+    new URL(clickUrl);
+  } catch (error) {
+    console.error('[Tracking] ERROR: Invalid click tracking URL generated:', clickUrl);
+    throw new Error('Invalid click tracking URL');
+  }
+  
+  return clickUrl;
 }
 
 /**
@@ -220,43 +248,54 @@ export function addTrackingPixel(htmlContent: string, pixelUrl: string): string 
 
 /**
  * Wrap all links in email HTML with tracking URLs
+ * Handles various HTML formats: href="url", href='url', href=url, href="url" with spaces, etc.
  */
 export function wrapLinksWithTracking(htmlContent: string, token: string): string {
-  // Match all href attributes in anchor tags
-  // This regex handles various formats: href="url", href='url', href=url
-  const linkRegex = /<a\s+([^>]*\s+)?href\s*=\s*["']([^"']+)["']([^>]*)>/gi;
+  // Improved regex that handles:
+  // - href="url" (double quotes)
+  // - href='url' (single quotes)
+  // - href=url (unquoted)
+  // - href = "url" (with spaces)
+  // - href="url" with other attributes before/after
+  const linkRegex = /<a\s+([^>]*?)\s*href\s*=\s*(["']?)([^"'\s>]+)\2([^>]*)>/gi;
 
-  return htmlContent.replace(linkRegex, (match, before, url, after) => {
-    // Skip mailto:, tel:, javascript:, and # links
-    if (url.startsWith('mailto:') || 
-        url.startsWith('tel:') || 
-        url.startsWith('javascript:') || 
-        url.startsWith('#') ||
-        url.startsWith('{{') || // Skip template variables
-        url.includes('/unsubscribe') || // Skip unsubscribe links
-        url.includes('/preferences')) {
+  return htmlContent.replace(linkRegex, (match, beforeAttrs, _quote, url, afterAttrs) => {
+    try {
+      // Skip mailto:, tel:, javascript:, and # links
+      if (url.startsWith('mailto:') || 
+          url.startsWith('tel:') || 
+          url.startsWith('javascript:') || 
+          url.startsWith('#') ||
+          url.startsWith('{{') || // Skip template variables
+          url.includes('/unsubscribe') || // Skip unsubscribe links
+          url.includes('/preferences')) {
+        return match;
+      }
+
+      // Convert relative URLs to absolute if needed
+      let absoluteUrl = url.trim();
+      
+      // Skip relative URLs (they won't work properly in emails anyway)
+      if (url.startsWith('/')) {
+        // Relative URL starting with / - skip tracking (ambiguous base URL)
+        return match;
+      } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        // Relative URL without leading slash - skip tracking
+        return match;
+      }
+
+      // Generate tracking URL - wrap in try-catch to handle errors gracefully
+      const trackingUrl = getClickTrackingUrl(token, absoluteUrl);
+
+      // Reconstruct the anchor tag with tracking URL
+      // Preserve all attributes before and after href
+      // Use double quotes for the href value to ensure compatibility
+      return `<a ${beforeAttrs.trim()} href="${trackingUrl}"${afterAttrs}>`;
+    } catch (error: any) {
+      // If tracking URL generation fails, return original link
+      console.error(`[Tracking] Failed to wrap link "${url.substring(0, 50)}...":`, error.message);
       return match;
     }
-
-    // Convert relative URLs to absolute if needed
-    let absoluteUrl = url;
-    if (url.startsWith('/')) {
-      // For relative URLs starting with /, we need to determine the appropriate base URL
-      // This should typically be the frontend URL, not the backend API URL
-      // If it's a relative URL in an email, it's likely meant to be relative to the email domain
-      // For now, we'll skip tracking these as they're ambiguous
-      // Most email links should be absolute URLs anyway
-      return match;
-    } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      // Relative URL without leading slash - keep as is (will be relative to email domain)
-      return match;
-    }
-
-    // Generate tracking URL
-    const trackingUrl = getClickTrackingUrl(token, absoluteUrl);
-
-    // Reconstruct the anchor tag with tracking URL
-    return `<a ${before || ''}href="${trackingUrl}"${after}>`;
   });
 }
 

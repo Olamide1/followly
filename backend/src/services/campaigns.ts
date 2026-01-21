@@ -518,6 +518,33 @@ export class CampaignService {
     const opens = parseInt(events.opens || '0');
     const clicks = parseInt(events.clicks || '0');
 
+    // Debug logging for tracking issues (only log if sent > 0 and opens/clicks are 0)
+    if (sent > 0 && opens === 0 && clicks === 0) {
+      // Check if there are any events at all for this campaign
+      const debugResult = await pool.query(
+        `SELECT event_type, COUNT(*) as count
+         FROM email_events e
+         INNER JOIN email_queue eq ON e.email_queue_id = eq.id
+         WHERE eq.campaign_id = $1 AND eq.user_id = $2
+         GROUP BY event_type`,
+        [campaignId, userId]
+      );
+      
+      console.log(`[Campaign Stats] Campaign ${campaignId} has ${sent} sent emails but 0 opens/clicks. Event breakdown:`, 
+        debugResult.rows.map((r: any) => `${r.event_type}: ${r.count}`)
+      );
+      
+      // Check if tracking tokens exist for sent emails
+      const tokenCheck = await pool.query(
+        `SELECT COUNT(DISTINCT tt.email_queue_id) as tokens_count
+         FROM tracking_tokens tt
+         INNER JOIN email_queue eq ON tt.email_queue_id = eq.id
+         WHERE eq.campaign_id = $1 AND eq.user_id = $2 AND eq.status = 'sent'`,
+        [campaignId, userId]
+      );
+      console.log(`[Campaign Stats] Tracking tokens found for ${tokenCheck.rows[0]?.tokens_count || 0} sent emails`);
+    }
+
     // Calculate rates
     const openRate = sent > 0 ? ((opens / sent) * 100).toFixed(2) : '0.00';
     const clickRate = sent > 0 ? ((clicks / sent) * 100).toFixed(2) : '0.00';
