@@ -83,6 +83,12 @@
               </p>
               <p class="text-xs text-ink-500 mt-1">Timezone: {{ userTimezone }}</p>
             </div>
+            <div v-if="campaign.sent_at && (campaign.status === 'sent' || campaign.status === 'sending')" class="mb-4">
+              <p class="text-xs text-ink-600">
+                Sent on: <span class="font-medium text-ink-900">{{ formatScheduledTime(campaign.sent_at) }}</span>
+              </p>
+              <p class="text-xs text-ink-500 mt-1">Timezone: {{ userTimezone }}</p>
+            </div>
             <div v-if="campaign.stats" class="flex space-x-6 text-sm text-ink-600">
               <span>Sent: {{ campaign.stats.sent }}</span>
               <span>Opens: {{ campaign.stats.openRate }}%</span>
