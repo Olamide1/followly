@@ -276,14 +276,30 @@ router.post('/forgot-password', async (req: Request, res: Response, next: NextFu
         };
         break;
       case 'nodemailer':
+        // Validate required SMTP fields
+        if (!config.smtp_host || !config.smtp_port || !config.smtp_user || !config.smtp_pass) {
+          console.error('[Password Reset] Nodemailer provider missing SMTP configuration:', {
+            smtp_host: !!config.smtp_host,
+            smtp_port: !!config.smtp_port,
+            smtp_user: !!config.smtp_user,
+            smtp_pass: !!config.smtp_pass,
+          });
+          throw createError('Nodemailer provider is missing required SMTP configuration', 500);
+        }
+        
         providerConfig.nodemailer = {
           host: config.smtp_host,
-          port: config.smtp_port,
+          port: typeof config.smtp_port === 'string' ? parseInt(config.smtp_port, 10) : config.smtp_port,
           secure: config.smtp_secure || false,
           user: config.smtp_user,
           pass: config.smtp_pass,
           fromEmail: config.from_email || process.env.DEFAULT_FROM_EMAIL || '',
           fromName: config.from_name || process.env.DEFAULT_FROM_NAME,
+          // Enable connection pooling
+          pool: true,
+          maxConnections: 5,
+          maxMessages: 100,
+          // Add DKIM if configured
           ...(config.dkim_domain && config.dkim_private_key && {
             dkim: {
               domainName: config.dkim_domain,

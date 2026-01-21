@@ -88,13 +88,28 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
           break;
 
         case 'nodemailer':
+          // Log the config to debug
+          console.log(`[Nodemailer] Loading provider for user ${userId}:`, {
+            smtp_host: config.smtp_host ? 'present' : 'missing',
+            smtp_port: config.smtp_port,
+            smtp_user: config.smtp_user ? 'present' : 'missing',
+            smtp_pass: config.smtp_pass ? 'present' : 'missing',
+            smtp_secure: config.smtp_secure,
+          });
+          
           if (!config.smtp_host || !config.smtp_port || !config.smtp_user || !config.smtp_pass) {
-            console.warn(`Nodemailer provider for user ${userId} missing SMTP configuration, skipping`);
+            console.warn(`[Nodemailer] Provider for user ${userId} missing SMTP configuration. Missing:`, {
+              smtp_host: !config.smtp_host,
+              smtp_port: !config.smtp_port,
+              smtp_user: !config.smtp_user,
+              smtp_pass: !config.smtp_pass,
+            });
             continue;
           }
+          
           providerConfig.nodemailer = {
             host: config.smtp_host,
-            port: config.smtp_port,
+            port: typeof config.smtp_port === 'string' ? parseInt(config.smtp_port, 10) : config.smtp_port,
             secure: config.smtp_secure || false,
             user: config.smtp_user,
             pass: config.smtp_pass,
@@ -113,6 +128,8 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
             maxConnections: 5,
             maxMessages: 100,
           };
+          
+          console.log(`[Nodemailer] Successfully configured provider for user ${userId}`);
           break;
 
         default:
@@ -121,6 +138,15 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
       }
 
       // Add provider to service
+      // Verify nodemailer config is set before adding
+      if (config.provider === 'nodemailer' && !providerConfig.nodemailer) {
+        console.error(`[Nodemailer] ERROR: providerConfig.nodemailer is undefined for user ${userId}! Provider config:`, {
+          provider: providerConfig.provider,
+          hasNodemailer: !!providerConfig.nodemailer,
+        });
+        throw new Error(`Nodemailer config not properly set for user ${userId}`);
+      }
+      
       providerService.addProvider(providerConfig);
       console.log(`Loaded ${config.provider} provider for user ${userId}`);
     } catch (error: any) {
