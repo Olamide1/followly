@@ -59,7 +59,23 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
 
     // Validate nodemailer-specific required fields
     if (provider === 'nodemailer') {
+      console.log('[Providers API] Received nodemailer config:', {
+        smtp_host: smtp_host ? 'present' : 'missing',
+        smtp_port: smtp_port,
+        smtp_secure: smtp_secure,
+        smtp_user: smtp_user ? 'present' : 'missing',
+        smtp_pass: smtp_pass ? 'present' : 'missing',
+        from_email,
+        from_name,
+      });
+      
       if (!smtp_host || !smtp_port || !smtp_user || !smtp_pass) {
+        console.error('[Providers API] Missing required SMTP fields:', {
+          smtp_host: !smtp_host,
+          smtp_port: !smtp_port,
+          smtp_user: !smtp_user,
+          smtp_pass: !smtp_pass,
+        });
         throw createError('SMTP host, port, user, and password are required for nodemailer', 400);
       }
     }
@@ -165,6 +181,19 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
         [existing.rows[0].id, req.userId]
       );
       config = result.rows[0];
+      
+      // Log saved config for nodemailer (without sensitive data)
+      if (provider === 'nodemailer') {
+        console.log('[Providers API] Updated nodemailer config saved:', {
+          id: config.id,
+          smtp_host: config.smtp_host ? 'present' : 'missing',
+          smtp_port: config.smtp_port,
+          smtp_secure: config.smtp_secure,
+          smtp_user: config.smtp_user ? 'present' : 'missing',
+          smtp_pass: config.smtp_pass ? 'present' : 'missing',
+          from_email: config.from_email,
+        });
+      }
     } else {
       // Create
       const result = await pool.query(
@@ -194,6 +223,19 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
         ]
       );
       config = result.rows[0];
+      
+      // Log saved config for nodemailer (without sensitive data)
+      if (provider === 'nodemailer') {
+        console.log('[Providers API] Created nodemailer config saved:', {
+          id: config.id,
+          smtp_host: config.smtp_host ? 'present' : 'missing',
+          smtp_port: config.smtp_port,
+          smtp_secure: config.smtp_secure,
+          smtp_user: config.smtp_user ? 'present' : 'missing',
+          smtp_pass: config.smtp_pass ? 'present' : 'missing',
+          from_email: config.from_email,
+        });
+      }
     }
 
     // Don't send sensitive fields

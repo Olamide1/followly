@@ -520,6 +520,19 @@ async function loadProviders() {
 
 async function addProvider() {
   try {
+    // Log what we're sending for nodemailer
+    if (providerForm.value.provider === 'nodemailer') {
+      console.log('[Frontend] Sending nodemailer config:', {
+        provider: providerForm.value.provider,
+        smtp_host: providerForm.value.smtp_host ? 'present' : 'missing',
+        smtp_port: providerForm.value.smtp_port,
+        smtp_secure: providerForm.value.smtp_secure,
+        smtp_user: providerForm.value.smtp_user ? 'present' : 'missing',
+        smtp_pass: providerForm.value.smtp_pass ? 'present' : 'missing',
+        from_email: providerForm.value.from_email,
+      });
+    }
+    
     await api.post('/providers', providerForm.value)
     alert('Provider added successfully!')
     providerForm.value = {

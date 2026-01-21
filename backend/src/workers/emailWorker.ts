@@ -38,6 +38,18 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
   if (result.rows.length === 0) {
     throw new Error(`No active email providers configured for user ${userId}. Please add a provider in Settings.`);
   }
+  
+  // Debug: Log all providers found
+  console.log(`[loadUserProviders] Found ${result.rows.length} active providers for user ${userId}:`, 
+    result.rows.map((r: any) => ({
+      id: r.id,
+      provider: r.provider,
+      has_smtp_host: !!r.smtp_host,
+      has_smtp_port: !!r.smtp_port,
+      has_smtp_user: !!r.smtp_user,
+      has_smtp_pass: !!r.smtp_pass,
+    }))
+  );
 
   // Initialize each provider
   for (const config of result.rows) {
@@ -88,22 +100,36 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
           break;
 
         case 'nodemailer':
-          // Log the config to debug
+          // Log the config to debug - show actual values (except password)
           console.log(`[Nodemailer] Loading provider for user ${userId}:`, {
-            smtp_host: config.smtp_host ? 'present' : 'missing',
-            smtp_port: config.smtp_port,
-            smtp_user: config.smtp_user ? 'present' : 'missing',
-            smtp_pass: config.smtp_pass ? 'present' : 'missing',
+            id: config.id,
+            smtp_host: config.smtp_host || 'NULL',
+            smtp_port: config.smtp_port || 'NULL',
+            smtp_user: config.smtp_user || 'NULL',
+            smtp_pass: config.smtp_pass ? '***present***' : 'NULL',
             smtp_secure: config.smtp_secure,
+            from_email: config.from_email,
+            // Check if columns exist (will be undefined if migration didn't run)
+            has_smtp_host_column: 'smtp_host' in config,
+            has_smtp_port_column: 'smtp_port' in config,
+            has_smtp_user_column: 'smtp_user' in config,
+            has_smtp_pass_column: 'smtp_pass' in config,
           });
           
+          // Check if columns exist (migration might not have run)
+          if (!('smtp_host' in config) || !('smtp_port' in config)) {
+            console.error(`[Nodemailer] CRITICAL: SMTP columns don't exist in database! Migration may not have run.`);
+            throw new Error('Database migration for nodemailer provider has not been run. Please contact support.');
+          }
+          
           if (!config.smtp_host || !config.smtp_port || !config.smtp_user || !config.smtp_pass) {
-            console.warn(`[Nodemailer] Provider for user ${userId} missing SMTP configuration. Missing:`, {
+            console.error(`[Nodemailer] Provider for user ${userId} missing SMTP configuration. Missing:`, {
               smtp_host: !config.smtp_host,
               smtp_port: !config.smtp_port,
               smtp_user: !config.smtp_user,
               smtp_pass: !config.smtp_pass,
             });
+            console.error(`[Nodemailer] Full config object:`, JSON.stringify(config, null, 2));
             continue;
           }
           
