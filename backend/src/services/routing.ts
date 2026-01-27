@@ -85,25 +85,40 @@ export class RoutingService {
     provider: ProviderType,
     success: boolean
   ): Promise<void> {
-    const redis = this.getRedis();
-    const today = new Date().toISOString().split('T')[0];
-    
-    if (success) {
-      const key = `provider:${userId}:${provider}:${today}:count`;
-      // Use multi to batch commands
-      await redis.multi()
-        .incr(key)
-        .expire(key, 86400)
-        .exec();
-    } else {
-      // Use a single error counter key per hour (not per error) to prevent key explosion
-      const now = new Date();
-      const hour = now.toISOString().split(':')[0]; // Format: YYYY-MM-DDTHH
-      const errorKey = `provider:${userId}:${provider}:errors:${hour}`;
-      await redis.multi()
-        .incr(errorKey)
-        .expire(errorKey, 3600)
-        .exec();
+    try {
+      const redis = this.getRedis();
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Add timeout to prevent hanging if Redis is disconnected
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Redis operation timeout')), 5000); // 5 second timeout
+      });
+      
+      if (success) {
+        const key = `provider:${userId}:${provider}:${today}:count`;
+        // Use multi to batch commands with timeout protection
+        const redisPromise = redis.multi()
+          .incr(key)
+          .expire(key, 86400)
+          .exec();
+        
+        await Promise.race([redisPromise, timeoutPromise]);
+      } else {
+        // Use a single error counter key per hour (not per error) to prevent key explosion
+        const now = new Date();
+        const hour = now.toISOString().split(':')[0]; // Format: YYYY-MM-DDTHH
+        const errorKey = `provider:${userId}:${provider}:errors:${hour}`;
+        const redisPromise = redis.multi()
+          .incr(errorKey)
+          .expire(errorKey, 3600)
+          .exec();
+        
+        await Promise.race([redisPromise, timeoutPromise]);
+      }
+    } catch (error: any) {
+      // Don't throw - Redis tracking failures shouldn't block email sending
+      // Log the error but allow the email to proceed
+      console.warn(`[Routing] Failed to record provider usage (non-critical):`, error?.message || error);
     }
   }
 }

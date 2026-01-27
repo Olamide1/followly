@@ -35,13 +35,22 @@ export function getRedisConfig() {
       // These are handled internally by Bull
       retryStrategy: (times: number) => {
         // Exponential backoff with max delay
+        // After 10 attempts, stop retrying to prevent infinite loops
+        if (times > 10) {
+          console.error('[BullMQ Redis] Max reconnection attempts reached, stopping retry');
+          return null; // Stop retrying
+        }
         const delay = Math.min(times * 50, 2000);
+        console.log(`[BullMQ Redis] Reconnecting... attempt ${times} (delay: ${delay}ms)`);
         return delay;
       },
       enableOfflineQueue: true, // Queue commands while reconnecting
       // Connection optimization: Bull uses ioredis which supports connection pooling
       // maxRetriesPerRequest: null allows ioredis to manage retries more efficiently
       maxRetriesPerRequest: null, // Disable automatic retries (Bull handles retries)
+      connectTimeout: 10000, // 10 second connection timeout
+      lazyConnect: false, // Connect immediately
+      keepAlive: 30000, // Send keepalive every 30 seconds
     };
   }
   
@@ -115,8 +124,26 @@ export async function initializeQueues(): Promise<void> {
       console.error('Email queue error:', error);
     });
     
-    emailQueue.on('failed', (job, err) => {
+    emailQueue.on('failed', async (job, err) => {
       console.error(`Email job ${job?.id} failed:`, err?.message || err);
+      // Mark email as failed in database if job data is available
+      await markEmailAsFailed(job);
+    });
+    
+    // Handle stalled jobs (jobs that exceeded lockDuration)
+    // This prevents emails from being stuck in "sending" state
+    emailQueue.on('stalled', async (jobId: Queue.JobId) => {
+      console.warn(`[Email Queue] Job ${jobId} stalled (exceeded lock duration)`);
+      try {
+        const job = await emailQueue!.getJob(jobId);
+        if (job) {
+          await markEmailAsFailed(job);
+          // Move to failed queue
+          await job.moveToFailed(new Error('Job stalled - exceeded lock duration'), true);
+        }
+      } catch (error: any) {
+        console.error(`[Email Queue] Failed to handle stalled job ${jobId}:`, error?.message || error);
+      }
     });
     
     schedulingQueue.on('error', (error) => {
@@ -138,6 +165,10 @@ export async function initializeQueues(): Promise<void> {
     // Start periodic cleanup of old jobs to prevent Redis memory issues
     // This runs every 30 minutes to clean up any jobs that weren't auto-removed
     startQueueCleanup();
+    
+    // Start periodic recovery of stuck emails
+    // This runs every 10 minutes to find and recover emails stuck in "sending" state
+    startStuckEmailRecovery();
 
     // Note: Processors are NOT registered here to avoid duplicate registration
     // The worker dyno (workers/index.ts) is responsible for registering processors
@@ -147,6 +178,105 @@ export async function initializeQueues(): Promise<void> {
   } catch (error) {
     console.error('Queue initialization error:', error);
     throw error;
+  }
+}
+
+/**
+ * Mark email as failed in database when BullMQ job fails or stalls
+ * This ensures emails don't get stuck in "sending" state
+ */
+async function markEmailAsFailed(job: Queue.Job): Promise<void> {
+  try {
+    const { emailQueueId, contactId, campaignId, automationId } = job.data || {};
+    
+    if (!emailQueueId) {
+      // Try to find email by other identifiers
+      const { pool } = await import('../database/connection');
+      
+      let whereClause: string;
+      const params: any[] = [];
+      let paramIndex = 1;
+      
+      if (contactId) {
+        params.push(contactId);
+        whereClause = `contact_id = $${paramIndex}`;
+        paramIndex++;
+        
+        if (campaignId) {
+          params.push(campaignId);
+          whereClause += ` AND campaign_id = $${paramIndex}`;
+          paramIndex++;
+        } else if (automationId) {
+          params.push(automationId);
+          whereClause += ` AND automation_id = $${paramIndex}`;
+          paramIndex++;
+        }
+        
+        // Only update if status is still 'sending' or 'queued' (not already sent/failed)
+        whereClause += ` AND status IN ('sending', 'queued')`;
+        
+        await pool.query(
+          `UPDATE email_queue 
+           SET status = 'failed', 
+               error_message = 'Job stalled or failed in queue',
+               retry_count = retry_count + 1
+           WHERE id = (
+             SELECT id FROM email_queue
+             WHERE ${whereClause}
+             ORDER BY created_at DESC
+             LIMIT 1
+           )`,
+          params
+        );
+        
+        console.log(`[Queue] Marked email as failed (stalled job): contactId=${contactId}, campaignId=${campaignId || 'null'}`);
+      }
+    } else {
+      // Direct update by emailQueueId
+      const { pool } = await import('../database/connection');
+      await pool.query(
+        `UPDATE email_queue 
+         SET status = 'failed', 
+             error_message = COALESCE(error_message, 'Job stalled or failed in queue'),
+             retry_count = retry_count + 1
+         WHERE id = $1 AND status IN ('sending', 'queued')`,
+        [emailQueueId]
+      );
+      
+      console.log(`[Queue] Marked email ${emailQueueId} as failed (stalled job)`);
+    }
+  } catch (error: any) {
+    // Don't throw - this is a cleanup operation
+    console.error('[Queue] Failed to mark email as failed:', error?.message || error);
+  }
+}
+
+/**
+ * Recover stuck emails in "sending" state
+ * Runs periodically to find emails that have been stuck for too long
+ */
+async function recoverStuckEmails(): Promise<void> {
+  try {
+    const { pool } = await import('../database/connection');
+    
+    // Find emails stuck in "sending" state for more than 5 minutes
+    // (lockDuration is 30 seconds, so 5 minutes is very safe)
+    const result = await pool.query(
+      `UPDATE email_queue 
+       SET status = 'failed', 
+           error_message = 'Email job timed out - no response from worker',
+           retry_count = retry_count + 1
+       WHERE status = 'sending' 
+         AND created_at < NOW() - INTERVAL '5 minutes'
+       RETURNING id, contact_id, campaign_id`,
+      []
+    );
+    
+    if (result.rows.length > 0) {
+      console.log(`[Queue Recovery] Recovered ${result.rows.length} stuck emails from "sending" state`);
+    }
+  } catch (error: any) {
+    console.error('[Queue Recovery] Failed to recover stuck emails:', error?.message || error);
   }
 }
 
@@ -232,6 +362,20 @@ function startQueueCleanup(): void {
   setInterval(cleanup, CLEANUP_INTERVAL);
   
   console.log('✅ Queue cleanup scheduled (aggressive on startup, then every 30 minutes)');
+}
+
+/**
+ * Periodic recovery of stuck emails in "sending" state
+ * Runs every 10 minutes to find emails that have been stuck for too long
+ */
+function startStuckEmailRecovery(): void {
+  const RECOVERY_INTERVAL = 10 * 60 * 1000; // 10 minutes
+  
+  // Run recovery immediately, then every 10 minutes
+  recoverStuckEmails();
+  setInterval(recoverStuckEmails, RECOVERY_INTERVAL);
+  
+  console.log('✅ Stuck email recovery scheduled (runs every 10 minutes)');
 }
 
 export function getEmailQueue() {

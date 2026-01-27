@@ -160,9 +160,10 @@ export async function recordOpenEvent(
   }
 
   // Insert new open event
+  // Cast $4 to text explicitly to avoid PostgreSQL type inference issues
   await pool.query(
     `INSERT INTO email_events (email_queue_id, contact_id, campaign_id, event_type, metadata)
-     VALUES ($1, $2, $3, 'opened', jsonb_build_object('source', $4))`,
+     VALUES ($1, $2, $3, 'opened', jsonb_build_object('source', $4::text))`,
     [emailQueueId, contactId, campaignId, source]
   );
 
