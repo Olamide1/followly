@@ -1,7 +1,6 @@
 import { createClient } from 'redis';
 
 let redisClient: ReturnType<typeof createClient> | null = null;
-let isConnecting = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
@@ -55,17 +54,14 @@ export async function initializeRedis(): Promise<void> {
     redisClient.on('ready', () => {
       console.log('✅ Redis connected and ready');
       reconnectAttempts = 0;
-      isConnecting = false;
     });
 
     redisClient.on('reconnecting', () => {
       console.log('[Redis] Reconnecting...');
-      isConnecting = true;
     });
 
     redisClient.on('end', () => {
       console.warn('[Redis] Connection ended');
-      isConnecting = false;
     });
 
     await redisClient.connect();
