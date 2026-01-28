@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { authenticateToken } from '../middleware/auth';
 import { pauseEmailQueue, resumeEmailQueue, isEmailQueuePaused } from '../services/queues';
 
 const router = Router();
