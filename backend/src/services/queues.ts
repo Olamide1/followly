@@ -400,3 +400,36 @@ export function getSchedulingQueue() {
   return schedulingQueue;
 }
 
+/**
+ * Pause email queue processing (stops processing new jobs immediately)
+ * Active jobs will complete, but no new jobs will be processed
+ */
+export async function pauseEmailQueue(): Promise<void> {
+  if (!emailQueue) {
+    throw new Error('Email queue not initialized');
+  }
+  await emailQueue.pause();
+  console.log('⏸️  Email queue paused - no new emails will be processed');
+}
+
+/**
+ * Resume email queue processing
+ */
+export async function resumeEmailQueue(): Promise<void> {
+  if (!emailQueue) {
+    throw new Error('Email queue not initialized');
+  }
+  await emailQueue.resume();
+  console.log('▶️  Email queue resumed - emails will be processed');
+}
+
+/**
+ * Check if email queue is paused
+ */
+export async function isEmailQueuePaused(): Promise<boolean> {
+  if (!emailQueue) {
+    return false;
+  }
+  return emailQueue.isPaused();
+}
+

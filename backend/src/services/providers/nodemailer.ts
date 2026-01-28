@@ -96,6 +96,17 @@ export class NodemailerProvider {
     } catch (error: any) {
       // Provide detailed error messages for common SMTP issues
       let errorMessage = error.message || 'Unknown error';
+      const errorResponse = error.response || '';
+      const errorResponseLower = errorResponse.toLowerCase();
+      
+      // Check for rate limit errors in response message
+      const isRateLimitError = errorResponseLower.includes('exceeded') ||
+                               errorResponseLower.includes('rate limit') ||
+                               errorResponseLower.includes('max emails per hour') ||
+                               errorResponseLower.includes('too many emails') ||
+                               errorResponseLower.includes('quota exceeded') ||
+                               error.message?.toLowerCase().includes('exceeded') ||
+                               error.message?.toLowerCase().includes('rate limit');
       
       if (error.code === 'ECONNREFUSED') {
         errorMessage = `Connection refused to ${this.config.host}:${this.config.port}. Check your SMTP host and port settings.`;
@@ -107,9 +118,23 @@ export class NodemailerProvider {
         errorMessage = `Recipient rejected: ${error.response || 'Unknown reason'}`;
       } else if (error.responseCode === 553) {
         errorMessage = `Invalid sender address: ${error.response || 'Check from_email'}`;
+      } else if (error.responseCode === 421 || error.responseCode === 450) {
+        // SMTP codes that might indicate rate limiting
+        errorMessage = `Service unavailable: ${error.response || 'Rate limit may have been exceeded'}`;
+      } else if (isRateLimitError) {
+        // Rate limit error detected
+        errorMessage = `Rate limit exceeded: ${error.response || error.message || 'Hourly sending limit reached'}`;
+        // Add a flag to the error so the worker can detect it
+        (error as any).isRateLimitError = true;
       }
 
-      throw new Error(`Nodemailer send error: ${errorMessage}`);
+      const finalError = new Error(`Nodemailer send error: ${errorMessage}`);
+      // Preserve rate limit flag
+      if (isRateLimitError) {
+        (finalError as any).isRateLimitError = true;
+        (finalError as any).responseCode = error.responseCode;
+      }
+      throw finalError;
     }
   }
 

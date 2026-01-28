@@ -434,6 +434,62 @@
       </div>
 
       <div class="bg-paper border border-grid-light p-8">
+        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Queue Management</h2>
+        <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+          Control email queue processing. Pause to stop sending emails immediately, or resume to continue processing.
+        </p>
+        
+        <div class="space-y-4">
+          <div class="flex items-center justify-between p-4 border border-grid-light">
+            <div>
+              <p class="text-sm font-medium text-ink-900 mb-1">Email Queue Status</p>
+              <p class="text-xs text-ink-600">
+                {{ queueStatus.paused ? 'Queue is paused - no new emails will be processed' : 'Queue is active - emails are being processed' }}
+              </p>
+            </div>
+            <div class="flex items-center space-x-2">
+              <span 
+                class="px-3 py-1 text-xs uppercase tracking-wider"
+                :class="queueStatus.paused ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'"
+              >
+                {{ queueStatus.paused ? 'Paused' : 'Active' }}
+              </span>
+            </div>
+          </div>
+          
+          <div class="flex space-x-3">
+            <button
+              @click="pauseQueue"
+              :disabled="queueStatus.paused || queueLoading"
+              class="btn"
+              :class="queueStatus.paused ? 'opacity-50 cursor-not-allowed' : 'btn-primary'"
+            >
+              {{ queueLoading ? 'Pausing...' : 'Pause Queue' }}
+            </button>
+            <button
+              @click="resumeQueue"
+              :disabled="!queueStatus.paused || queueLoading"
+              class="btn"
+              :class="!queueStatus.paused ? 'opacity-50 cursor-not-allowed' : 'btn-primary'"
+            >
+              {{ queueLoading ? 'Resuming...' : 'Resume Queue' }}
+            </button>
+            <button
+              @click="checkQueueStatus"
+              :disabled="queueLoading"
+              class="btn btn-ghost"
+            >
+              Refresh Status
+            </button>
+          </div>
+          
+          <div v-if="queueStatus.message" class="mt-4 p-4 border-l-2 border-ink-900 bg-ink-50">
+            <p class="text-xs text-ink-700">{{ queueStatus.message }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-paper border border-grid-light p-8">
         <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Footer Settings</h2>
         <p class="text-sm text-ink-600 mb-8 leading-relaxed">
           Customize the unsubscribe footer that is automatically added to all campaign and automation emails. This footer is required for compliance with email regulations (CAN-SPAM, GDPR, CASL).
@@ -508,6 +564,11 @@ const footerForm = ref({
   custom_footer_text: '',
   company_address: '',
 })
+const queueStatus = ref({
+  paused: false,
+  message: '',
+})
+const queueLoading = ref(false)
 
 async function loadProviders() {
   try {
@@ -644,9 +705,66 @@ async function saveFooterSettings() {
   }
 }
 
+async function checkQueueStatus() {
+  try {
+    queueLoading.value = true
+    const response = await api.get('/admin/queue/status')
+    queueStatus.value = {
+      paused: response.data.paused,
+      message: response.data.message || '',
+    }
+  } catch (error: any) {
+    console.error('Failed to check queue status:', error)
+    queueStatus.value.message = 'Failed to check queue status'
+  } finally {
+    queueLoading.value = false
+  }
+}
+
+async function pauseQueue() {
+  if (!confirm('Are you sure you want to pause the email queue? No new emails will be processed until you resume.')) {
+    return
+  }
+  
+  try {
+    queueLoading.value = true
+    const response = await api.post('/admin/queue/pause')
+    queueStatus.value = {
+      paused: response.data.paused,
+      message: response.data.message || 'Email queue paused successfully',
+    }
+    alert('Email queue paused. No new emails will be processed.')
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to pause queue'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to pause queue:', error)
+  } finally {
+    queueLoading.value = false
+  }
+}
+
+async function resumeQueue() {
+  try {
+    queueLoading.value = true
+    const response = await api.post('/admin/queue/resume')
+    queueStatus.value = {
+      paused: response.data.paused,
+      message: response.data.message || 'Email queue resumed successfully',
+    }
+    alert('Email queue resumed. Emails will be processed.')
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to resume queue'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to resume queue:', error)
+  } finally {
+    queueLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadProviders()
   loadFooterSettings()
+  checkQueueStatus()
 })
 </script>
 

@@ -3,6 +3,7 @@ import { pool } from '../database/connection';
 import { RoutingService } from '../services/routing';
 import { EmailProviderService, ProviderConfig, ProviderType } from '../services/providers';
 import { WarmupService } from '../services/warmup';
+import { RateLimiterService } from '../services/rateLimiter';
 import {
   generateTrackingToken,
   storeTrackingToken,
@@ -13,6 +14,7 @@ import {
 
 let routingService: RoutingService | null = null;
 let warmupService: WarmupService | null = null;
+let rateLimiterService: RateLimiterService | null = null;
 
 // Cache provider services per user (to avoid reloading on every email)
 const userProviderServices: Map<number, EmailProviderService> = new Map();
@@ -207,8 +209,10 @@ export async function processEmailQueue(job: Job) {
     fromName,
   } = job.data;
 
-  // Declare finalEmailQueueId outside try block so it's available in catch block (Bug 2 fix)
+  // Declare variables outside try block so they're available in catch block
   let finalEmailQueueId: number | undefined = emailQueueId;
+  let routingDecision: { provider: ProviderType; reason: string } | null = null;
+  const domain = fromEmail.split('@')[1] || '';
 
   try {
     // Initialize services
@@ -220,6 +224,9 @@ export async function processEmailQueue(job: Job) {
     }
     if (!warmupService) {
       warmupService = new WarmupService();
+    }
+    if (!rateLimiterService) {
+      rateLimiterService = new RateLimiterService();
     }
 
     // Load user's providers from database
@@ -294,16 +301,47 @@ export async function processEmailQueue(job: Job) {
     const availableProviders = ['brevo', 'mailjet', 'resend', 'nodemailer'].filter(p => providerService.hasProvider(p as ProviderType));
     console.log(`Available providers for user ${userId}:`, availableProviders);
     
-    const routingDecision = await userRoutingService.selectProvider(userId, campaignType);
+    routingDecision = await userRoutingService.selectProvider(userId, campaignType);
 
     // Check warmup limits with the actual provider
-    const domain = fromEmail.split('@')[1] || '';
-    const canSend = await warmupService.canSend(userId, domain, routingDecision.provider);
+    const canSendWarmup = await warmupService.canSend(userId, domain, routingDecision.provider);
 
-    if (!canSend) {
+    if (!canSendWarmup) {
       // Reschedule for later
       await job.moveToDelayed(Date.now() + 3600000); // 1 hour later
       return;
+    }
+
+    // Check rate limit for domain (prevents hitting SMTP provider limits)
+    // Only check for Nodemailer/SMTP providers (they have strict hourly limits)
+    if (routingDecision.provider === 'nodemailer' && rateLimiterService) {
+      const rateLimitCheck = await rateLimiterService.canSend(domain);
+      
+      if (!rateLimitCheck.canSend) {
+        // At rate limit - delay until next hour
+        const delayMs = rateLimitCheck.timeUntilReset + 60000; // Add 1 minute buffer
+        console.warn(
+          `[RateLimiter] Domain ${domain} has reached hourly limit (${rateLimitCheck.currentCount}/${rateLimitCheck.limit}). ` +
+          `Delaying email for ${Math.round(delayMs / 60000)} minutes until limit resets.`
+        );
+        
+        // Update email_queue status to show it's delayed due to rate limit
+        if (finalEmailQueueId) {
+          await pool.query(
+            `UPDATE email_queue 
+             SET status = 'queued', 
+                 error_message = $1
+             WHERE id = $2`,
+            [
+              `Rate limit reached: ${rateLimitCheck.currentCount}/${rateLimitCheck.limit} emails/hour. Will retry after limit resets.`,
+              finalEmailQueueId
+            ]
+          );
+        }
+        
+        await job.moveToDelayed(Date.now() + delayMs);
+        return;
+      }
     }
 
     // Get provider instance
@@ -446,9 +484,75 @@ export async function processEmailQueue(job: Job) {
     // Record warmup send
     await warmupService.recordSend(userId, domain, routingDecision.provider);
 
+    // Record rate limit send (for Nodemailer/SMTP providers)
+    if (routingDecision.provider === 'nodemailer' && rateLimiterService) {
+      await rateLimiterService.recordSend(domain);
+    }
+
     return result;
   } catch (error: any) {
     console.error('Email send error:', error);
+
+    // Check if this is a rate limit error (for Nodemailer/SMTP providers)
+    const isRateLimitError = routingDecision && routingDecision.provider === 'nodemailer' && 
+      ((error as any).isRateLimitError ||
+       error.message?.toLowerCase().includes('exceeded') || 
+       error.message?.toLowerCase().includes('rate limit') ||
+       error.message?.toLowerCase().includes('max emails per hour') ||
+       error.message?.toLowerCase().includes('too many emails') ||
+       error.message?.toLowerCase().includes('quota exceeded') ||
+       (error as any).responseCode === 421 || // SMTP code for service not available (often used for rate limits)
+       (error as any).responseCode === 450);  // SMTP code for mailbox unavailable (sometimes used for rate limits)
+
+    if (isRateLimitError && rateLimiterService && domain) {
+      // Rate limit hit - update our tracker and delay the email
+      
+      // Mark that we've hit the limit (set count to limit to prevent immediate retries)
+      try {
+        const redis = await import('../services/redis').then(m => m.getRedisClient());
+        const now = new Date();
+        const hourKey = now.toISOString().split(':')[0];
+        const redisKey = `rate_limit:${domain}:${hourKey}`;
+        
+        // Set count to limit to prevent further sends this hour
+        await redis.set(redisKey, '60'); // Hard limit reached
+        await redis.expire(redisKey, 7200);
+        
+        console.warn(`[RateLimiter] Rate limit error detected for domain ${domain}. Marking limit as reached.`);
+      } catch (redisError: any) {
+        console.error(`[RateLimiter] Failed to update rate limit tracker:`, redisError?.message || redisError);
+      }
+
+      // Calculate delay until next hour
+      const now = new Date();
+      const nextHour = new Date(now);
+      nextHour.setHours(nextHour.getHours() + 1);
+      nextHour.setMinutes(0);
+      nextHour.setSeconds(0);
+      nextHour.setMilliseconds(0);
+      const delayMs = nextHour.getTime() - now.getTime() + 60000; // Add 1 minute buffer
+
+      // Update email_queue status
+      if (finalEmailQueueId) {
+        await pool.query(
+          `UPDATE email_queue 
+           SET status = 'queued', 
+               error_message = $1
+           WHERE id = $2`,
+          [
+            `Rate limit exceeded: Domain ${domain} has reached hourly sending limit. Will retry after limit resets.`,
+            finalEmailQueueId
+          ]
+        );
+      }
+
+      // Delay the job
+      await job.moveToDelayed(Date.now() + delayMs);
+      console.warn(
+        `[RateLimiter] Rate limit error for domain ${domain}. Delaying email for ${Math.round(delayMs / 60000)} minutes.`
+      );
+      return; // Don't mark as failed, just delay
+    }
 
     // Record failure - use finalEmailQueueId (Bug 2 fix: use finalEmailQueueId instead of emailQueueId)
     if (finalEmailQueueId) {
