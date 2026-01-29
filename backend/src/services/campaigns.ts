@@ -390,91 +390,108 @@ export class CampaignService {
       ['sending', campaignId]
     );
 
-    // Queue emails
+    // Queue emails in batches to avoid memory issues and improve performance
     const emailQueue = getEmailQueue();
     const fromEmail = campaign.from_email || process.env.DEFAULT_FROM_EMAIL || '';
+    const BATCH_SIZE = 50; // Process contacts in batches of 50
+    let queuedCount = 0;
 
-    for (const contact of listContacts) {
-      // Check suppression
-      const suppressed = await pool.query(
-        'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
-        [userId, contact.email]
-      );
+    // Process contacts in batches
+    for (let i = 0; i < listContacts.length; i += BATCH_SIZE) {
+      const batch = listContacts.slice(i, i + BATCH_SIZE);
+      const batchPromises = batch.map(async (contact) => {
+        // Check suppression
+        const suppressed = await pool.query(
+          'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
+          [userId, contact.email]
+        );
 
-      if (suppressed.rows.length > 0) {
-        continue; // Skip suppressed contacts
-      }
-
-      // Personalize content
-      const personalizationData = {
-        name: contact.name || '',
-        company: contact.company || '',
-        email: contact.email,
-      };
-
-      // Personalize subject and content - handle both {{name}} and {{ name }} syntax
-      const personalizedSubject = this.personalizationService.renderTemplate(
-        campaign.subject,
-        personalizationData
-      );
-      let personalizedContent = this.personalizationService.renderTemplate(
-        campaign.content,
-        personalizationData
-      );
-
-      // Append unsubscribe footer automatically
-      const { appendUnsubscribeFooter } = await import('./unsubscribe');
-      personalizedContent = await appendUnsubscribeFooter(
-        userId,
-        contact.email,
-        personalizedContent,
-        {
-          includePreferences: true,
-          includeViewInBrowser: false,
+        if (suppressed.rows.length > 0) {
+          return null; // Skip suppressed contacts
         }
-      );
 
-      // Determine send time (spread out)
-      const sendDelay = Math.floor(Math.random() * 3600); // Random delay up to 1 hour
-      const scheduledAt = new Date(Date.now() + sendDelay * 1000);
+        // Personalize content
+        const personalizationData = {
+          name: contact.name || '',
+          company: contact.company || '',
+          email: contact.email,
+        };
 
-      // Create email_queue record upfront for tracking
-      const emailQueueResult = await pool.query(
-        `INSERT INTO email_queue 
-         (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id`,
-        [
+        // Personalize subject and content - handle both {{name}} and {{ name }} syntax
+        const personalizedSubject = this.personalizationService.renderTemplate(
+          campaign.subject,
+          personalizationData
+        );
+        let personalizedContent = this.personalizationService.renderTemplate(
+          campaign.content,
+          personalizationData
+        );
+
+        // Append unsubscribe footer automatically
+        const { appendUnsubscribeFooter } = await import('./unsubscribe');
+        personalizedContent = await appendUnsubscribeFooter(
           userId,
-          contact.id,
-          campaignId,
           contact.email,
-          personalizedSubject,
           personalizedContent,
-          fromEmail,
-          campaign.from_name || process.env.DEFAULT_FROM_NAME,
-          'queued',
-          scheduledAt,
-        ]
-      );
-      const emailQueueId = emailQueueResult.rows[0].id;
+          {
+            includePreferences: true,
+            includeViewInBrowser: false,
+          }
+        );
 
-      // Add to Bull queue with email_queue_id for reference
-      await emailQueue.add({
-        userId,
-        contactId: contact.id,
-        campaignId,
-        emailQueueId, // Include email_queue_id in job data
-        toEmail: contact.email,
-        subject: personalizedSubject,
-        content: personalizedContent,
-        fromEmail,
-        fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
-        scheduledAt: scheduledAt.toISOString(),
-      }, {
-        delay: sendDelay * 1000,
-        jobId: `email-${emailQueueId}`, // Use email_queue_id as job ID for easy lookup
+        // Determine send time (spread out)
+        const sendDelay = Math.floor(Math.random() * 3600); // Random delay up to 1 hour
+        const scheduledAt = new Date(Date.now() + sendDelay * 1000);
+
+        // Create email_queue record upfront for tracking
+        const emailQueueResult = await pool.query(
+          `INSERT INTO email_queue 
+           (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           RETURNING id`,
+          [
+            userId,
+            contact.id,
+            campaignId,
+            contact.email,
+            personalizedSubject,
+            personalizedContent,
+            fromEmail,
+            campaign.from_name || process.env.DEFAULT_FROM_NAME,
+            'queued',
+            scheduledAt,
+          ]
+        );
+        const emailQueueId = emailQueueResult.rows[0].id;
+
+        // Add to Bull queue with email_queue_id for reference
+        await emailQueue.add({
+          userId,
+          contactId: contact.id,
+          campaignId,
+          emailQueueId, // Include email_queue_id in job data
+          toEmail: contact.email,
+          subject: personalizedSubject,
+          content: personalizedContent,
+          fromEmail,
+          fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
+          scheduledAt: scheduledAt.toISOString(),
+        }, {
+          delay: sendDelay * 1000,
+          jobId: `email-${emailQueueId}`, // Use email_queue_id as job ID for easy lookup
+        });
+
+        return emailQueueId;
       });
+
+      // Wait for batch to complete before processing next batch
+      const batchResults = await Promise.all(batchPromises);
+      queuedCount += batchResults.filter(id => id !== null).length;
+
+      // Log progress for large campaigns
+      if (listContacts.length > 100) {
+        console.log(`[Campaign Send] Processed ${Math.min(i + BATCH_SIZE, listContacts.length)}/${listContacts.length} contacts for campaign ${campaignId}`);
+      }
     }
 
     // Mark campaign as sent
@@ -483,7 +500,7 @@ export class CampaignService {
       ['sent', campaignId]
     );
 
-    return { queued: listContacts.length };
+    return { queued: queuedCount };
   }
 
   async getCampaignStats(userId: number, campaignId: number) {

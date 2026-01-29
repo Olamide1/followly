@@ -5,6 +5,7 @@ import { RoutingService } from '../services/routing';
 import { EmailProviderService } from '../services/providers';
 import { WarmupService } from '../services/warmup';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { getCampaignSendQueue } from '../services/queues';
 
 const router = Router();
 router.use(authenticateToken);
@@ -71,13 +72,45 @@ router.delete('/:id', async (req: AuthRequest, res: Response, next: NextFunction
   }
 });
 
-// Send campaign
+// Send campaign (queues job for async processing to avoid H12 timeouts)
 router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const result = await campaignService.sendCampaign(req.userId!, parseInt(req.params.id));
-    res.json(result);
+    const userId = req.userId!;
+    const campaignId = parseInt(req.params.id);
+
+    // Validate campaign exists and belongs to user before queuing
+    const campaign = await campaignService.getCampaign(userId, campaignId);
+
+    // Check if campaign is already sent or sending
+    if (campaign.status === 'sending' || campaign.status === 'sent') {
+      res.status(400).json({ error: 'Campaign already sent or sending' });
+      return;
+    }
+
+    // Validate list_id
+    if (!campaign.list_id) {
+      res.status(400).json({ error: 'Campaign must have a list assigned' });
+      return;
+    }
+
+    // Queue the campaign send job for async processing
+    const campaignSendQueue = getCampaignSendQueue();
+    const job = await campaignSendQueue.add({
+      userId,
+      campaignId,
+    }, {
+      jobId: `campaign-send-${campaignId}-${userId}`,
+      attempts: 2,
+    });
+
+    // Return immediately - the worker will process the campaign send
+    res.json({ 
+      success: true,
+      message: 'Campaign send queued successfully. Emails will be processed in the background.',
+      jobId: job.id,
+    });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 

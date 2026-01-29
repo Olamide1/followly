@@ -5,6 +5,7 @@ import Queue from 'bull';
 let emailQueue: Queue.Queue | null = null;
 // let automationQueue: Queue.Queue | null = null; // DISABLED: Temporarily commented out
 let schedulingQueue: Queue.Queue | null = null;
+let campaignSendQueue: Queue.Queue | null = null;
 
 // Parse Redis URL and configure for Heroku TLS
 // This function is exported so it can be shared across the application
@@ -119,6 +120,31 @@ export async function initializeQueues(): Promise<void> {
       },
     });
 
+    campaignSendQueue = new Queue('campaign-send', {
+      redis: redisConfig,
+      settings: {
+        lockDuration: 300000, // 5 minutes - campaign sends can take longer
+        lockRenewTime: 60000, // Renew lock every minute
+        stalledInterval: 30000,
+        maxStalledCount: 1,
+      },
+      defaultJobOptions: {
+        removeOnComplete: {
+          age: 3600, // Remove completed jobs older than 1 hour
+          count: 50,
+        },
+        removeOnFail: {
+          age: 86400 * 7, // Remove failed jobs older than 7 days
+          count: 500,
+        },
+        attempts: 2, // Campaign sends are less critical to retry (contacts are already queued)
+        backoff: {
+          type: 'exponential',
+          delay: 5000,
+        },
+      },
+    });
+
     // Add error handlers for better debugging
     emailQueue.on('error', (error) => {
       console.error('Email queue error:', error);
@@ -154,10 +180,19 @@ export async function initializeQueues(): Promise<void> {
       console.error(`Scheduling job ${job?.id} failed:`, err?.message || err);
     });
 
+    campaignSendQueue.on('error', (error) => {
+      console.error('Campaign send queue error:', error);
+    });
+
+    campaignSendQueue.on('failed', (job, err) => {
+      console.error(`Campaign send job ${job?.id} failed:`, err?.message || err);
+    });
+
     // Wait for queues to be ready before processing
     await Promise.all([
       emailQueue.isReady(),
       schedulingQueue.isReady(),
+      campaignSendQueue.isReady(),
     ]);
 
     console.log('✅ Redis connection ready');
@@ -398,6 +433,13 @@ export function getSchedulingQueue() {
     throw new Error('Scheduling queue not initialized');
   }
   return schedulingQueue;
+}
+
+export function getCampaignSendQueue() {
+  if (!campaignSendQueue) {
+    throw new Error('Campaign send queue not initialized');
+  }
+  return campaignSendQueue;
 }
 
 /**
