@@ -93,6 +93,18 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
       return;
     }
 
+    // Get quick estimate of contact count for UI feedback
+    // This is a fast query that won't cause timeout issues
+    let estimatedCount = 0;
+    try {
+      const listService = new (await import('../services/lists')).ListService();
+      const listContacts = await listService.getAllListContacts(userId, campaign.list_id);
+      estimatedCount = listContacts.length;
+    } catch (error: any) {
+      // If we can't get count, continue anyway - worker will handle it
+      console.warn(`[Campaign Send] Could not get contact count estimate: ${error.message}`);
+    }
+
     // Queue the campaign send job for async processing
     const campaignSendQueue = getCampaignSendQueue();
     const job = await campaignSendQueue.add({
@@ -108,6 +120,7 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
       success: true,
       message: 'Campaign send queued successfully. Emails will be processed in the background.',
       jobId: job.id,
+      queued: estimatedCount, // Estimated count for UI display
     });
   } catch (error: any) {
     return next(error);
