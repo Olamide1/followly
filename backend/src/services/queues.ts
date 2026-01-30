@@ -6,6 +6,7 @@ let emailQueue: Queue.Queue | null = null;
 // let automationQueue: Queue.Queue | null = null; // DISABLED: Temporarily commented out
 let schedulingQueue: Queue.Queue | null = null;
 let campaignSendQueue: Queue.Queue | null = null;
+let contactImportQueue: Queue.Queue | null = null;
 
 // Parse Redis URL and configure for Heroku TLS
 // This function is exported so it can be shared across the application
@@ -145,6 +146,31 @@ export async function initializeQueues(): Promise<void> {
       },
     });
 
+    contactImportQueue = new Queue('contact-import', {
+      redis: redisConfig,
+      settings: {
+        lockDuration: 600000, // 10 minutes - contact imports can take a while
+        lockRenewTime: 120000, // Renew lock every 2 minutes
+        stalledInterval: 30000,
+        maxStalledCount: 1,
+      },
+      defaultJobOptions: {
+        removeOnComplete: {
+          age: 3600, // Remove completed jobs older than 1 hour
+          count: 50,
+        },
+        removeOnFail: {
+          age: 86400 * 7, // Remove failed jobs older than 7 days
+          count: 500,
+        },
+        attempts: 2, // Retry failed imports once
+        backoff: {
+          type: 'exponential',
+          delay: 5000,
+        },
+      },
+    });
+
     // Add error handlers for better debugging
     emailQueue.on('error', (error) => {
       console.error('Email queue error:', error);
@@ -188,11 +214,20 @@ export async function initializeQueues(): Promise<void> {
       console.error(`Campaign send job ${job?.id} failed:`, err?.message || err);
     });
 
+    contactImportQueue.on('error', (error) => {
+      console.error('Contact import queue error:', error);
+    });
+
+    contactImportQueue.on('failed', (job, err) => {
+      console.error(`Contact import job ${job?.id} failed:`, err?.message || err);
+    });
+
     // Wait for queues to be ready before processing
     await Promise.all([
       emailQueue.isReady(),
       schedulingQueue.isReady(),
       campaignSendQueue.isReady(),
+      contactImportQueue.isReady(),
     ]);
 
     console.log('✅ Redis connection ready');
@@ -440,6 +475,13 @@ export function getCampaignSendQueue() {
     throw new Error('Campaign send queue not initialized');
   }
   return campaignSendQueue;
+}
+
+export function getContactImportQueue() {
+  if (!contactImportQueue) {
+    throw new Error('Contact import queue not initialized');
+  }
+  return contactImportQueue;
 }
 
 /**

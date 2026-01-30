@@ -205,12 +205,39 @@ router.post('/:id/contacts/import', async (req: AuthRequest, res: Response, next
       );
     }
 
+    // Validate list exists and belongs to user before queuing
     const service = new ListService();
-    const result = await service.importContactsFromCSV(req.userId!, listId, contacts);
-    
+    try {
+      const list = await service.getList(req.userId!, listId);
+      if (list.type === 'smart') {
+        throw createError('Cannot manually add contacts to smart lists', 400);
+      }
+    } catch (error: any) {
+      if (error.status === 404) {
+        throw createError('List not found', 404);
+      }
+      throw error;
+    }
+
+    // Queue the contact import job for async processing
+    const { getContactImportQueue } = await import('../services/queues');
+    const contactImportQueue = getContactImportQueue();
+    const job = await contactImportQueue.add({
+      userId: req.userId!,
+      listId,
+      contacts,
+      columnMapping,
+    }, {
+      jobId: `contact-import-${listId}-${req.userId!}-${Date.now()}`,
+      attempts: 2,
+    });
+
+    // Return immediately - the worker will process the import
     res.json({
       success: true,
-      ...result,
+      message: 'Contact import queued successfully. Contacts will be processed in the background.',
+      jobId: job.id,
+      estimatedCount: contacts.length,
     });
   } catch (error: any) {
     return next(error);

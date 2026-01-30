@@ -511,29 +511,90 @@ export class ListService {
         uniqueContacts.push(contactData);
       }
 
-      // Import/update contacts and collect IDs
-      for (const contactData of uniqueContacts) {
-        try {
-          const normalizedEmail = contactData.email.toLowerCase().trim();
-          
-          // Check if contact exists
-          const existing = await client.query(
-            'SELECT id FROM contacts WHERE user_id = $1 AND email = $2',
-            [userId, normalizedEmail]
-          );
-
-          let contactId: number;
-          let wasAlreadyInList = false;
-
-          if (existing.rows.length > 0) {
-            // Update existing contact
-            contactId = existing.rows[0].id;
+      // Import/update contacts in batches for better performance
+      const BATCH_SIZE = 100; // Process contacts in batches of 100
+      
+      for (let i = 0; i < uniqueContacts.length; i += BATCH_SIZE) {
+        const batch = uniqueContacts.slice(i, i + BATCH_SIZE);
+        const normalizedEmails = batch.map(c => c.email.toLowerCase().trim());
+        
+        // Batch check for existing contacts
+        const existingContactsResult = await client.query(
+          'SELECT id, email FROM contacts WHERE user_id = $1 AND email = ANY($2)',
+          [userId, normalizedEmails]
+        );
+        
+        const existingContactsMap = new Map<string, number>();
+        existingContactsResult.rows.forEach((row: any) => {
+          existingContactsMap.set(row.email.toLowerCase(), row.id);
+        });
+        
+        const contactsToInsert: any[] = [];
+        const contactsToUpdate: Array<{ id: number; data: any }> = [];
+        
+        // Separate contacts into insert and update batches
+        for (const contactData of batch) {
+          try {
+            const normalizedEmail = contactData.email.toLowerCase().trim();
+            const existingId = existingContactsMap.get(normalizedEmail);
             
-            // Check if already in list
-            if (listContactIds.has(contactId)) {
-              alreadyInList++;
-              wasAlreadyInList = true;
+            if (existingId) {
+              // Will update
+              contactsToUpdate.push({ id: existingId, data: contactData });
+            } else {
+              // Will insert
+              contactsToInsert.push({
+                email: normalizedEmail,
+                name: contactData.name?.trim() || null,
+                company: contactData.company?.trim() || null,
+                role: contactData.role?.trim() || null,
+                country: contactData.country?.trim() || null,
+                subscription_status: contactData.subscription_status || 'subscribed',
+              });
             }
+          } catch (error: any) {
+            failed++;
+            errors.push(`${contactData.email}: ${error.message}`);
+          }
+        }
+        
+        // Batch insert new contacts
+        if (contactsToInsert.length > 0) {
+          const insertValues = contactsToInsert.map((_, index) => {
+            const base = index * 7;
+            return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
+          }).join(', ');
+          
+          const insertParams: any[] = [];
+          contactsToInsert.forEach(contact => {
+            insertParams.push(userId, contact.email, contact.name, contact.company, contact.role, contact.country, contact.subscription_status);
+          });
+          
+          const insertResult = await client.query(
+            `INSERT INTO contacts (user_id, email, name, company, role, country, subscription_status)
+             VALUES ${insertValues}
+             RETURNING id, email`,
+            insertParams
+          );
+          
+          added += insertResult.rows.length;
+          imported += insertResult.rows.length;
+          
+          // Add new contact IDs to contactIds (if not already in list)
+          insertResult.rows.forEach((row: any) => {
+            const contactId = row.id;
+            if (!listContactIds.has(contactId)) {
+              contactIds.push(contactId);
+            } else {
+              alreadyInList++;
+            }
+          });
+        }
+        
+        // Batch update existing contacts
+        for (const { id: contactId, data: contactData } of contactsToUpdate) {
+          try {
+            const wasAlreadyInList = listContactIds.has(contactId);
             
             // Update contact fields (only non-empty values)
             const updates: string[] = [];
@@ -572,35 +633,24 @@ export class ListService {
             } else {
               updated++;
             }
-          } else {
-            // Create new contact
-            const result = await client.query(
-              `INSERT INTO contacts 
-               (user_id, email, name, company, role, country, subscription_status)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
-               RETURNING id`,
-              [
-                userId,
-                normalizedEmail,
-                contactData.name?.trim() || null,
-                contactData.company?.trim() || null,
-                contactData.role?.trim() || null,
-                contactData.country?.trim() || null,
-                contactData.subscription_status || 'subscribed',
-              ]
-            );
-            contactId = result.rows[0].id;
-            added++;
+            
+            // Only add to contactIds if not already in list
+            if (!wasAlreadyInList) {
+              contactIds.push(contactId);
+            } else {
+              alreadyInList++;
+            }
+            
+            imported++;
+          } catch (error: any) {
+            failed++;
+            errors.push(`${contactData.email}: ${error.message}`);
           }
-
-          // Only add to contactIds if not already in list
-          if (!wasAlreadyInList) {
-            contactIds.push(contactId);
-          }
-          imported++;
-        } catch (error: any) {
-          failed++;
-          errors.push(`${contactData.email}: ${error.message}`);
+        }
+        
+        // Log progress for large imports
+        if (uniqueContacts.length > 500) {
+          console.log(`[Contact Import] Processed ${Math.min(i + BATCH_SIZE, uniqueContacts.length)}/${uniqueContacts.length} contacts for list ${listId}`);
         }
       }
 

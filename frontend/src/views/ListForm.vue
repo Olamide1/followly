@@ -596,7 +596,11 @@ const csvImportResult = ref<{
   alreadyInList: number
   failed: number
   skipped: number
-  errors: string[]
+  errors?: string[]
+  success?: boolean
+  message?: string
+  estimatedCount?: number
+  jobId?: string
 } | null>(null)
 
 onMounted(async () => {
@@ -882,14 +886,39 @@ async function handleCsvImport() {
       columnMapping: csvColumnMapping.value,
     })
 
-    csvImportResult.value = response.data
-    csvImportStep.value = 'results'
-    
-    // Reload list contacts after successful import
-    if (response.data.imported > 0) {
+    // Handle async response (job queued)
+    if (response.data.jobId) {
+      csvImportResult.value = {
+        success: true,
+        message: response.data.message || 'Contact import queued successfully',
+        estimatedCount: response.data.estimatedCount || 0,
+        imported: 0, // Will be updated when job completes
+        added: 0,
+        updated: 0,
+        alreadyInList: 0,
+        failed: 0,
+        skipped: 0,
+        errors: [], // Required property
+      }
+      csvImportStep.value = 'results'
+      
+      // Show success message
+      alert(`Contact import queued successfully! ${response.data.estimatedCount || 0} contacts will be imported in the background.`)
+      
+      // Reload list contacts after a delay to see any contacts that were imported quickly
       setTimeout(() => {
         loadListContacts()
-      }, 1500)
+      }, 2000)
+    } else {
+      // Handle synchronous response (for backwards compatibility)
+      csvImportResult.value = response.data
+      csvImportStep.value = 'results'
+      
+      if (response.data.imported > 0) {
+        setTimeout(() => {
+          loadListContacts()
+        }, 1500)
+      }
     }
   } catch (err: any) {
     csvImportError.value = err.response?.data?.error || 'Failed to import contacts'

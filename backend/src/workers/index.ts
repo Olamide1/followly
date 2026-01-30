@@ -5,9 +5,10 @@ import { processEmailQueue } from './emailWorker';
 // import { processAutomationQueue } from './automationWorker'; // DISABLED: Temporarily commented out
 import { processSchedulingQueue } from './schedulingWorker';
 import { processCampaignSendQueue } from './campaignSendWorker';
+import { processContactImportQueue } from './contactImportWorker';
 import { initializeRedis } from '../services/redis';
 import { initializeDatabase } from '../database/connection';
-import { initializeQueues, getEmailQueue, getSchedulingQueue, getCampaignSendQueue } from '../services/queues';
+import { initializeQueues, getEmailQueue, getSchedulingQueue, getCampaignSendQueue, getContactImportQueue } from '../services/queues';
 
 // Wait for Redis connection before starting processors
 async function startWorkers() {
@@ -25,6 +26,7 @@ async function startWorkers() {
     const emailQueue = getEmailQueue();
     const schedulingQueue = getSchedulingQueue();
     const campaignSendQueue = getCampaignSendQueue();
+    const contactImportQueue = getContactImportQueue();
 
     // Register processors on the shared queue instances
     emailQueue.process(async (job) => {
@@ -49,7 +51,12 @@ async function startWorkers() {
       return processCampaignSendQueue(job);
     });
 
-    console.log('🚀 Combined worker started - listening for email, automation, scheduling, and campaign send jobs');
+    contactImportQueue.process(async (job) => {
+      console.log(`Processing contact import job ${job.id}`);
+      return processContactImportQueue(job);
+    });
+
+    console.log('🚀 Combined worker started - listening for email, automation, scheduling, campaign send, and contact import jobs');
   } catch (error) {
     console.error('Failed to start workers:', error);
     process.exit(1);
