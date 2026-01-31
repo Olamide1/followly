@@ -6,7 +6,7 @@ import { ListService } from '../services/lists';
  * This worker processes contact imports in batches to avoid timeouts
  */
 export async function processContactImportQueue(job: Job) {
-  const { userId, listId, contacts, columnMapping } = job.data;
+  const { userId, listId, contacts } = job.data;
 
   if (!userId || !listId || !contacts || !Array.isArray(contacts)) {
     throw new Error('Missing required fields: userId, listId, and contacts array');
