@@ -72,8 +72,8 @@ export async function initializeQueues(): Promise<void> {
       settings: {
         // Reduce connection overhead by using fewer connections per queue
         lockDuration: 30000, // 30 seconds
-        lockRenewTime: 15000, // Renew lock every 15 seconds
-        stalledInterval: 30000, // Check for stalled jobs every 30 seconds
+        lockRenewTime: 25000, // Renew lock every 25 seconds (reduces overhead)
+        stalledInterval: 60000, // Check for stalled jobs every 60 seconds (reduces checks)
         maxStalledCount: 1, // Retry stalled jobs once
       },
       // CRITICAL: Cleanup old jobs to prevent Redis memory issues
@@ -99,8 +99,8 @@ export async function initializeQueues(): Promise<void> {
       redis: redisConfig,
       settings: {
         lockDuration: 30000,
-        lockRenewTime: 15000,
-        stalledInterval: 30000,
+        lockRenewTime: 25000, // Renew lock every 25 seconds (reduces overhead)
+        stalledInterval: 60000, // Check for stalled jobs every 60 seconds (reduces checks)
         maxStalledCount: 1,
       },
       // CRITICAL: Cleanup old jobs to prevent Redis memory issues
@@ -126,7 +126,7 @@ export async function initializeQueues(): Promise<void> {
       settings: {
         lockDuration: 300000, // 5 minutes - campaign sends can take longer
         lockRenewTime: 60000, // Renew lock every minute
-        stalledInterval: 30000,
+        stalledInterval: 60000, // Check for stalled jobs every 60 seconds (reduces checks)
         maxStalledCount: 1,
       },
       defaultJobOptions: {
@@ -151,7 +151,7 @@ export async function initializeQueues(): Promise<void> {
       settings: {
         lockDuration: 600000, // 10 minutes - contact imports can take a while
         lockRenewTime: 120000, // Renew lock every 2 minutes
-        stalledInterval: 30000,
+        stalledInterval: 60000, // Check for stalled jobs every 60 seconds (reduces checks)
         maxStalledCount: 1,
       },
       defaultJobOptions: {
