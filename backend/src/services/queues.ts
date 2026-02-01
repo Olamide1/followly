@@ -71,13 +71,14 @@ export async function initializeQueues(): Promise<void> {
       // Optimize connection usage
       settings: {
         // Reduce connection overhead by using fewer connections per queue
-        lockDuration: 30000, // 30 seconds
-        lockRenewTime: 25000, // Renew lock every 25 seconds (reduces overhead)
-        stalledInterval: 60000, // Check for stalled jobs every 60 seconds (reduces checks)
-        maxStalledCount: 1, // Retry stalled jobs once
+        lockDuration: 15000, // 15 seconds - faster detection of stuck jobs
+        lockRenewTime: 12000, // Renew lock every 12 seconds (reduces overhead, must be < lockDuration)
+        stalledInterval: 30000, // Check for stalled jobs every 30 seconds (faster detection)
+        maxStalledCount: 2, // Retry stalled jobs twice (more retries for stuck emails)
       },
       // CRITICAL: Cleanup old jobs to prevent Redis memory issues
       // Keep only last 100 completed jobs, remove older ones automatically
+      // Note: Bull v4 doesn't support 'timeout' in defaultJobOptions - timeout is handled in emailWorker.ts
       defaultJobOptions: {
         removeOnComplete: {
           age: 3600, // Remove completed jobs older than 1 hour (3600 seconds)

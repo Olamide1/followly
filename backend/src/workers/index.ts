@@ -29,7 +29,8 @@ async function startWorkers() {
     const contactImportQueue = getContactImportQueue();
 
     // Register processors on the shared queue instances
-    emailQueue.process(async (job) => {
+    // Limit email processing to 1 concurrent job to reduce Redis connection usage
+    emailQueue.process(1, async (job) => {
       console.log(`Processing email job ${job.id}`);
       return processEmailQueue(job);
     });

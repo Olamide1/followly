@@ -453,13 +453,30 @@ export async function processEmailQueue(job: Job) {
     }
 
     // Send email with tracked content
-    const result = await emailProvider.sendEmail({
+    // Wrap in timeout to prevent indefinite hangs on slow/unresponsive SMTP servers
+    const sendEmailPromise = emailProvider.sendEmail({
       to: toEmail,
       subject,
       htmlContent: trackedContent,
       fromEmail,
       fromName,
     });
+    
+    let timeoutId: NodeJS.Timeout;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('Email send timeout after 60 seconds - SMTP server may be unresponsive')), 60000);
+    });
+    
+    let result;
+    try {
+      result = await Promise.race([sendEmailPromise, timeoutPromise]);
+      // Clear timeout if sendEmail completes successfully
+      clearTimeout(timeoutId!);
+    } catch (error) {
+      // Clear timeout on error as well
+      clearTimeout(timeoutId!);
+      throw error;
+    }
 
     // Record success - finalEmailQueueId is guaranteed to exist at this point
 
