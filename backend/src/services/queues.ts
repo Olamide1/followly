@@ -298,6 +298,26 @@ export async function initializeQueues(): Promise<void> {
       console.error('Email queue error:', error);
     });
     
+    campaignSendQueue.on('error', (error) => {
+      console.error('Campaign send queue error:', error);
+    });
+    
+    campaignSendQueue.on('waiting', (jobId) => {
+      console.log(`[Campaign Send Queue] Job ${jobId} is waiting`);
+    });
+    
+    campaignSendQueue.on('active', (job) => {
+      console.log(`[Campaign Send Queue] Job ${job.id} is now active (campaign ${job.data.campaignId})`);
+    });
+    
+    campaignSendQueue.on('completed', (job) => {
+      console.log(`[Campaign Send Queue] Job ${job.id} completed (campaign ${job.data.campaignId})`);
+    });
+    
+    campaignSendQueue.on('failed', (job, err) => {
+      console.error(`[Campaign Send Queue] Job ${job?.id} failed (campaign ${job?.data?.campaignId}):`, err?.message || err);
+    });
+    
     emailQueue.on('failed', async (job, err) => {
       console.error(`Email job ${job?.id} failed:`, err?.message || err);
       // Mark email as failed in database if job data is available
@@ -329,11 +349,30 @@ export async function initializeQueues(): Promise<void> {
     });
 
     campaignSendQueue.on('error', (error) => {
-      console.error('Campaign send queue error:', error);
+      console.error('[Campaign Send Queue] ❌ Queue error:', error?.message || error);
+    });
+    
+    campaignSendQueue.on('waiting', (jobId) => {
+      console.log(`[Campaign Send Queue] ⏳ Job ${jobId} is waiting in queue`);
+    });
+    
+    campaignSendQueue.on('active', (job) => {
+      console.log(`[Campaign Send Queue] 🚀 Job ${job.id} is now active (campaign ${job.data.campaignId}, user ${job.data.userId})`);
+    });
+    
+    campaignSendQueue.on('completed', (job) => {
+      console.log(`[Campaign Send Queue] ✅ Job ${job.id} completed successfully (campaign ${job.data.campaignId})`);
     });
 
     campaignSendQueue.on('failed', (job, err) => {
-      console.error(`Campaign send job ${job?.id} failed:`, err?.message || err);
+      console.error(`[Campaign Send Queue] ❌ Job ${job?.id} failed (campaign ${job?.data?.campaignId}):`, {
+        error: err?.message || err,
+        stack: err?.stack,
+      });
+    });
+    
+    campaignSendQueue.on('stalled', (jobId) => {
+      console.warn(`[Campaign Send Queue] ⚠️ Job ${jobId} stalled (exceeded lock duration)`);
     });
 
     contactImportQueue.on('error', (error) => {

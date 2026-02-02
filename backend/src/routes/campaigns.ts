@@ -6,6 +6,7 @@ import { EmailProviderService } from '../services/providers';
 import { WarmupService } from '../services/warmup';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { getCampaignSendQueue } from '../services/queues';
+import { createError } from '../middleware/errorHandler';
 
 const router = Router();
 router.use(authenticateToken);
@@ -136,21 +137,62 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
 
     // Queue the campaign send job for async processing
     const campaignSendQueue = getCampaignSendQueue();
-    const job = await campaignSendQueue.add({
-      userId,
-      campaignId,
-    }, {
-      jobId: `campaign-send-${campaignId}-${userId}`,
-      attempts: 2,
-    });
+    
+    if (!campaignSendQueue) {
+      console.error(`[Campaign Send Route] ERROR: Campaign send queue is null/undefined`);
+      await pool.query(
+        'UPDATE campaigns SET status = $1 WHERE id = $2',
+        ['draft', campaignId]
+      );
+      throw createError('Campaign send queue is not initialized', 500);
+    }
+    
+    console.log(`[Campaign Send Route] Attempting to queue campaign ${campaignId} send job for user ${userId}`);
+    
+    try {
+      const jobId = `campaign-send-${campaignId}-${userId}`;
+      console.log(`[Campaign Send Route] Adding job with ID: ${jobId}`);
+      
+      const job = await campaignSendQueue.add({
+        userId,
+        campaignId,
+      }, {
+        jobId,
+        attempts: 2,
+      });
 
-    // Return immediately - the worker will process the campaign send
-    res.json({ 
-      success: true,
-      message: 'Campaign send queued successfully. Emails will be processed in the background.',
-      jobId: job.id,
-      queued: estimatedCount, // Estimated count for UI display
-    });
+      console.log(`[Campaign Send Route] ✅ Successfully queued campaign ${campaignId} send job: ${job.id}`);
+      
+      // Verify job was actually added to queue
+      const jobCounts = await campaignSendQueue.getJobCounts();
+      console.log(`[Campaign Send Route] Queue status after adding job:`, {
+        waiting: jobCounts.waiting,
+        active: jobCounts.active,
+        completed: jobCounts.completed,
+        failed: jobCounts.failed,
+        delayed: jobCounts.delayed,
+      });
+      
+      // Return immediately - the worker will process the campaign send
+      res.json({ 
+        success: true,
+        message: 'Campaign send queued successfully. Emails will be processed in the background.',
+        jobId: job.id,
+        queued: estimatedCount, // Estimated count for UI display
+      });
+    } catch (queueError: any) {
+      console.error(`[Campaign Send Route] ❌ Failed to queue campaign ${campaignId} send job:`, {
+        error: queueError?.message || queueError,
+        stack: queueError?.stack,
+        name: queueError?.name,
+      });
+      // If queuing fails, reset campaign status back to draft
+      await pool.query(
+        'UPDATE campaigns SET status = $1 WHERE id = $2',
+        ['draft', campaignId]
+      );
+      throw createError(`Failed to queue campaign send: ${queueError?.message || 'Unknown error'}`, 500);
+    }
   } catch (error: any) {
     return next(error);
   }
