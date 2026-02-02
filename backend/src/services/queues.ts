@@ -51,7 +51,7 @@ export function getRedisConfig() {
       // maxRetriesPerRequest: null allows ioredis to manage retries more efficiently
       maxRetriesPerRequest: null, // Disable automatic retries (Bull handles retries)
       connectTimeout: 10000, // 10 second connection timeout
-      lazyConnect: false, // Connect immediately
+      lazyConnect: true, // Connect only when queues are actually used (when adding/processing jobs)
       keepAlive: 30000, // Send keepalive every 30 seconds
     };
   }
@@ -77,16 +77,16 @@ export async function initializeQueues(): Promise<void> {
         maxStalledCount: 2, // Retry stalled jobs twice (more retries for stuck emails)
       },
       // CRITICAL: Cleanup old jobs to prevent Redis memory issues
-      // Keep only last 100 completed jobs, remove older ones automatically
+      // Keep only last 50 completed jobs, remove older ones automatically
       // Note: Bull v4 doesn't support 'timeout' in defaultJobOptions - timeout is handled in emailWorker.ts
       defaultJobOptions: {
         removeOnComplete: {
-          age: 3600, // Remove completed jobs older than 1 hour (3600 seconds)
-          count: 100, // Keep max 100 completed jobs
+          age: 1800, // Remove completed jobs older than 30 minutes (more aggressive)
+          count: 50, // Keep max 50 completed jobs (reduced from 100)
         },
         removeOnFail: {
-          age: 86400 * 7, // Remove failed jobs older than 7 days
-          count: 1000, // Keep max 1000 failed jobs for debugging
+          age: 86400, // Remove failed jobs older than 1 day (more aggressive - was 7 days)
+          count: 500, // Keep max 500 failed jobs (reduced from 1000)
         },
         attempts: 3, // Retry failed jobs up to 3 times
         backoff: {
@@ -393,26 +393,43 @@ export async function aggressiveQueueCleanup(): Promise<{ email: { completed: nu
  * Runs every 30 minutes to clean up completed/failed jobs
  */
 function startQueueCleanup(): void {
-  // Run cleanup every 30 minutes
-  const CLEANUP_INTERVAL = 30 * 60 * 1000; // 30 minutes in milliseconds
+  // Run cleanup every 10 minutes (more frequent to reduce Redis usage)
+  const CLEANUP_INTERVAL = 10 * 60 * 1000; // 10 minutes in milliseconds
   
   const cleanup = async () => {
     try {
       if (emailQueue) {
-        // Clean up completed jobs older than 1 hour
-        const cleanedCompleted = await emailQueue.clean(3600 * 1000, 'completed', 100);
-        // Clean up failed jobs older than 7 days
-        const cleanedFailed = await emailQueue.clean(86400 * 7 * 1000, 'failed', 1000);
+        // Clean up completed jobs older than 30 minutes (more aggressive)
+        const cleanedCompleted = await emailQueue.clean(1800 * 1000, 'completed', 50);
+        // Clean up failed jobs older than 1 day (more aggressive - was 7 days)
+        const cleanedFailed = await emailQueue.clean(86400 * 1000, 'failed', 500);
         if (cleanedCompleted.length > 0 || cleanedFailed.length > 0) {
           console.log(`[Queue Cleanup] Email queue: removed ${cleanedCompleted.length} completed, ${cleanedFailed.length} failed jobs`);
         }
       }
       
       if (schedulingQueue) {
-        const cleanedCompleted = await schedulingQueue.clean(3600 * 1000, 'completed', 50);
-        const cleanedFailed = await schedulingQueue.clean(86400 * 7 * 1000, 'failed', 500);
+        const cleanedCompleted = await schedulingQueue.clean(1800 * 1000, 'completed', 25);
+        const cleanedFailed = await schedulingQueue.clean(86400 * 1000, 'failed', 250);
         if (cleanedCompleted.length > 0 || cleanedFailed.length > 0) {
           console.log(`[Queue Cleanup] Scheduling queue: removed ${cleanedCompleted.length} completed, ${cleanedFailed.length} failed jobs`);
+        }
+      }
+      
+      // Also clean campaign-send and contact-import queues
+      if (campaignSendQueue) {
+        const cleanedCompleted = await campaignSendQueue.clean(1800 * 1000, 'completed', 25);
+        const cleanedFailed = await campaignSendQueue.clean(86400 * 1000, 'failed', 250);
+        if (cleanedCompleted.length > 0 || cleanedFailed.length > 0) {
+          console.log(`[Queue Cleanup] Campaign-send queue: removed ${cleanedCompleted.length} completed, ${cleanedFailed.length} failed jobs`);
+        }
+      }
+      
+      if (contactImportQueue) {
+        const cleanedCompleted = await contactImportQueue.clean(1800 * 1000, 'completed', 25);
+        const cleanedFailed = await contactImportQueue.clean(86400 * 1000, 'failed', 250);
+        if (cleanedCompleted.length > 0 || cleanedFailed.length > 0) {
+          console.log(`[Queue Cleanup] Contact-import queue: removed ${cleanedCompleted.length} completed, ${cleanedFailed.length} failed jobs`);
         }
       }
     } catch (error: any) {
@@ -429,10 +446,10 @@ function startQueueCleanup(): void {
     cleanup();
   });
   
-  // Then run regular cleanup every 30 minutes
+  // Then run regular cleanup every 10 minutes
   setInterval(cleanup, CLEANUP_INTERVAL);
   
-  console.log('✅ Queue cleanup scheduled (aggressive on startup, then every 30 minutes)');
+  console.log('✅ Queue cleanup scheduled (aggressive on startup, then every 10 minutes)');
 }
 
 /**
