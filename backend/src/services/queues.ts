@@ -454,6 +454,9 @@ export async function initializeQueues(): Promise<void> {
     // This runs every hour to update domain reputation scores and auto-pause if needed
     startReputationCalculation();
 
+    // Start periodic check for temporary warmup increases that need to be reverted
+    startWarmupTemporaryIncreaseCheck();
+
     // Note: Processors are NOT registered here to avoid duplicate registration
     // The worker dyno (workers/index.ts) is responsible for registering processors
     // This ensures jobs are only processed once, avoiding race conditions
@@ -804,6 +807,30 @@ function startReputationCalculation(): void {
   setInterval(calculateReputations, REPUTATION_INTERVAL);
   
   console.log('✅ Reputation calculation scheduled (runs every hour)');
+}
+
+/**
+ * Periodic check for temporary warmup increases that need to be reverted
+ * Runs every hour to auto-revert temporary increases that have expired
+ */
+function startWarmupTemporaryIncreaseCheck(): void {
+  const CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
+  
+  const checkAndRevert = async () => {
+    try {
+      const { WarmupService } = await import('./warmup');
+      const warmupService = new WarmupService();
+      await warmupService.checkAndRevertTemporaryIncreases();
+    } catch (error: any) {
+      console.error('[Warmup] Error checking temporary increases:', error?.message || error);
+    }
+  };
+  
+  // Run immediately, then every hour
+  checkAndRevert();
+  setInterval(checkAndRevert, CHECK_INTERVAL);
+  
+  console.log('✅ Warmup temporary increase check scheduled (runs every hour)');
 }
 
 export function getEmailQueue() {

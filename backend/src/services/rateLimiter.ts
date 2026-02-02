@@ -37,11 +37,13 @@ export class RateLimiterService {
     this.validateInputs(domain, userId, provider);
     const normalizedDomain = domain.trim().toLowerCase();
     // Base limits by provider type
+    // These are maximum hourly limits - actual limits may be lower during warmup
     const baseLimits: Record<string, number> = {
       resend: 100, // ESPs have higher limits
       brevo: 100,
       mailjet: 100,
-      nodemailer: 60, // SMTP is more conservative
+      nodemailer: 100, // Increased from 60 to 100 - safe for established SMTP servers
+      // Note: Warmup will still restrict this to daily limit / 12 (2-hour windows)
     };
 
     let limit = baseLimits[provider || 'nodemailer'] || 60;
@@ -72,9 +74,14 @@ export class RateLimiterService {
             const schedule = await warmupService.getWarmupSchedule(userId, normalizedDomain, provider);
             
             if (schedule) {
-              // During warmup, use daily limit divided by 24 (approximate hourly limit)
+              // During warmup, calculate hourly limit from daily limit
+              // Use daily limit divided by 12 (2-hour windows) for better distribution
+              // This allows more reasonable sending rates while still respecting daily limits
+              // Example: 50/day / 12 = ~4/hour (much better than 50/24 = 2/hour)
               const dailyLimit = await warmupService.getDailyLimit(userId, normalizedDomain, provider);
-              const warmupHourlyLimit = Math.max(1, Math.floor(dailyLimit / 24));
+              // Minimum 2 emails/hour during warmup (prevents 1/hour bottleneck)
+              // Maximum based on daily limit distributed across 12 2-hour windows
+              const warmupHourlyLimit = Math.max(2, Math.floor(dailyLimit / 12));
               limit = Math.min(limit, warmupHourlyLimit); // Use the more restrictive limit
             }
           } catch (error: any) {

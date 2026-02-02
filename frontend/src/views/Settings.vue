@@ -572,6 +572,230 @@
       </div>
 
       <div class="bg-paper border border-grid-light p-8">
+        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Warmup Management</h2>
+        <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+          Manage domain warmup schedules to safely increase sending capacity. Warmup protects your domain reputation by gradually increasing limits while monitoring bounce and complaint rates.
+        </p>
+        
+        <div class="space-y-4">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <p class="text-sm font-medium text-ink-900">
+                Domains in Warmup: <span class="text-blue-600">{{ warmupSummary.domainsInWarmup }}</span> / {{ warmupSummary.totalDomains }}
+              </p>
+              <p class="text-xs text-ink-600 mt-1">
+                Total Remaining Today: <span class="font-medium">{{ warmupSummary.totalRemainingToday }}</span> emails
+              </p>
+            </div>
+            <button
+              @click="loadWarmupStatus"
+              :disabled="warmupLoading"
+              class="btn btn-ghost"
+            >
+              {{ warmupLoading ? 'Loading...' : 'Refresh Status' }}
+            </button>
+          </div>
+
+          <div v-if="warmupLoading" class="p-4 border border-grid-light text-center">
+            <p class="text-sm text-ink-600">Loading warmup schedules...</p>
+          </div>
+
+          <div v-else-if="warmupSchedules.length === 0" class="p-4 border border-grid-light text-center">
+            <p class="text-sm text-ink-600">No warmup schedules found. Warmup schedules are created automatically when you start sending emails.</p>
+          </div>
+
+          <div v-else class="space-y-6">
+            <div
+              v-for="schedule in warmupSchedules"
+              :key="`${schedule.domain}-${schedule.provider}`"
+              class="border border-grid-light p-6"
+            >
+              <div class="flex justify-between items-start mb-4">
+                <div class="flex-1">
+                  <div class="flex items-center space-x-3 mb-2">
+                    <h3 class="text-sm font-medium text-ink-900">{{ schedule.domain }}</h3>
+                    <span class="text-xs text-ink-500 uppercase tracking-wider">{{ schedule.provider }}</span>
+                    <span 
+                      v-if="schedule.inWarmup"
+                      class="px-2 py-1 text-xs uppercase tracking-wider bg-blue-100 text-blue-800"
+                    >
+                      Phase {{ schedule.phase }}
+                    </span>
+                    <span 
+                      v-else
+                      class="px-2 py-1 text-xs uppercase tracking-wider bg-green-100 text-green-800"
+                    >
+                      Completed
+                    </span>
+                  </div>
+                  
+                  <div v-if="schedule.inWarmup" class="space-y-2 mt-3">
+                    <div class="grid grid-cols-2 gap-4 text-xs">
+                      <div>
+                        <span class="text-ink-500">Daily Limit:</span>
+                        <span class="ml-2 font-medium text-ink-900">{{ schedule.dailyLimit }}</span>
+                      </div>
+                      <div>
+                        <span class="text-ink-500">Hourly Limit:</span>
+                        <span class="ml-2 font-medium text-ink-900">{{ schedule.hourlyLimit }}</span>
+                      </div>
+                      <div>
+                        <span class="text-ink-500">Sent Today:</span>
+                        <span class="ml-2 font-medium text-ink-900">{{ schedule.currentCount }}</span>
+                      </div>
+                      <div>
+                        <span class="text-ink-500">Remaining:</span>
+                        <span class="ml-2 font-medium text-green-600">{{ schedule.remainingToday }}</span>
+                      </div>
+                    </div>
+                    
+                    <div v-if="schedule.startDate" class="text-xs text-ink-500 mt-2">
+                      Started: {{ new Date(schedule.startDate).toLocaleDateString() }}
+                    </div>
+                  </div>
+                  
+                  <div v-else class="text-xs text-ink-600 mt-2">
+                    Warmup completed. No restrictions active.
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="schedule.inWarmup" class="mt-4 pt-4 border-t border-grid-light">
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    @click="fastTrackWarmup(schedule.domain, schedule.provider)"
+                    :disabled="warmupActionLoading"
+                    class="btn btn-primary text-xs"
+                  >
+                    Fast-Track to Phase 3 (500/day)
+                  </button>
+                  <button
+                    @click="showIncreaseLimitModal(schedule)"
+                    :disabled="warmupActionLoading"
+                    class="btn text-xs"
+                  >
+                    Increase Limit
+                  </button>
+                  <button
+                    @click="showTemporaryIncreaseModal(schedule)"
+                    :disabled="warmupActionLoading"
+                    class="btn text-xs"
+                  >
+                    Temporary Increase
+                  </button>
+                  <button
+                    @click="completeWarmup(schedule.domain, schedule.provider)"
+                    :disabled="warmupActionLoading"
+                    class="btn text-xs bg-yellow-600 hover:bg-yellow-700"
+                  >
+                    Complete Warmup
+                  </button>
+                </div>
+                <p class="text-xs text-ink-500 mt-3">
+                  ⚠️ Warmup monitoring is active. Limits will auto-reduce if bounce/complaint rates exceed safe thresholds.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Increase Limit Modal -->
+      <div v-if="showIncreaseModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white p-8 max-w-md w-full mx-4">
+          <h3 class="text-lg font-medium text-ink-900 mb-4">Increase Warmup Limit</h3>
+          <p class="text-sm text-ink-600 mb-4">
+            Set a new daily limit for <strong>{{ increaseModalSchedule?.domain }}</strong> ({{ increaseModalSchedule?.provider }}).
+            Warmup monitoring will remain active.
+          </p>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                Daily Limit (0-2000)
+              </label>
+              <input
+                v-model.number="increaseLimitValue"
+                type="number"
+                min="0"
+                max="2000"
+                class="input w-full"
+                placeholder="e.g., 500"
+              />
+            </div>
+            <div class="flex space-x-3">
+              <button
+                @click="applyIncreaseLimit"
+                :disabled="warmupActionLoading || !increaseLimitValue || increaseLimitValue < 0 || increaseLimitValue > 2000"
+                class="btn btn-primary flex-1"
+              >
+                {{ warmupActionLoading ? 'Applying...' : 'Apply' }}
+              </button>
+              <button
+                @click="showIncreaseModal = false"
+                class="btn btn-ghost flex-1"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Temporary Increase Modal -->
+      <div v-if="showTemporaryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white p-8 max-w-md w-full mx-4">
+          <h3 class="text-lg font-medium text-ink-900 mb-4">Temporary Warmup Increase</h3>
+          <p class="text-sm text-ink-600 mb-4">
+            Set a temporary higher limit for <strong>{{ temporaryModalSchedule?.domain }}</strong> ({{ temporaryModalSchedule?.provider }}).
+            The limit will automatically revert after the specified days.
+          </p>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                Daily Limit (0-2000)
+              </label>
+              <input
+                v-model.number="temporaryLimitValue"
+                type="number"
+                min="0"
+                max="2000"
+                class="input w-full"
+                placeholder="e.g., 500"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+                Revert After (days, 1-30)
+              </label>
+              <input
+                v-model.number="temporaryDaysValue"
+                type="number"
+                min="1"
+                max="30"
+                class="input w-full"
+                placeholder="7"
+              />
+            </div>
+            <div class="flex space-x-3">
+              <button
+                @click="applyTemporaryIncrease"
+                :disabled="warmupActionLoading || !temporaryLimitValue || !temporaryDaysValue"
+                class="btn btn-primary flex-1"
+              >
+                {{ warmupActionLoading ? 'Applying...' : 'Apply' }}
+              </button>
+              <button
+                @click="showTemporaryModal = false"
+                class="btn btn-ghost flex-1"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-paper border border-grid-light p-8">
         <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Footer Settings</h2>
         <p class="text-sm text-ink-600 mb-8 leading-relaxed">
           Customize the unsubscribe footer that is automatically added to all campaign and automation emails. This footer is required for compliance with email regulations (CAN-SPAM, GDPR, CASL).
@@ -653,6 +877,21 @@ const queueStatus = ref({
 const queueLoading = ref(false)
 const failedJobs = ref<any[]>([])
 const failedJobsLoading = ref(false)
+const warmupSchedules = ref<any[]>([])
+const warmupSummary = ref({
+  totalDomains: 0,
+  domainsInWarmup: 0,
+  totalRemainingToday: 0,
+})
+const warmupLoading = ref(false)
+const warmupActionLoading = ref(false)
+const showIncreaseModal = ref(false)
+const showTemporaryModal = ref(false)
+const increaseModalSchedule = ref<any>(null)
+const temporaryModalSchedule = ref<any>(null)
+const increaseLimitValue = ref<number>(500)
+const temporaryLimitValue = ref<number>(500)
+const temporaryDaysValue = ref<number>(7)
 
 async function loadProviders() {
   try {
@@ -878,11 +1117,152 @@ async function cleanFailedJobs() {
   }
 }
 
+async function loadWarmupStatus() {
+  try {
+    warmupLoading.value = true
+    const response = await api.get('/admin/warmup/status')
+    warmupSchedules.value = response.data.warmupSchedules || []
+    warmupSummary.value = response.data.summary || {
+      totalDomains: 0,
+      domainsInWarmup: 0,
+      totalRemainingToday: 0,
+    }
+  } catch (error: any) {
+    console.error('Failed to load warmup status:', error)
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to load warmup status'
+    alert(`Error: ${errorMessage}`)
+  } finally {
+    warmupLoading.value = false
+  }
+}
+
+async function fastTrackWarmup(domain: string, provider: string) {
+  if (!confirm(`Fast-track warmup for ${domain} (${provider}) to Phase 3 (500/day)? Warmup monitoring will remain active.`)) {
+    return
+  }
+  
+  try {
+    warmupActionLoading.value = true
+    const response = await api.post('/admin/warmup/fast-track', { domain, provider })
+    alert(response.data.message || 'Warmup fast-tracked successfully')
+    await loadWarmupStatus()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to fast-track warmup'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to fast-track warmup:', error)
+  } finally {
+    warmupActionLoading.value = false
+  }
+}
+
+function showIncreaseLimitModal(schedule: any) {
+  increaseModalSchedule.value = schedule
+  increaseLimitValue.value = schedule.dailyLimit || 500
+  showIncreaseModal.value = true
+}
+
+function showTemporaryIncreaseModal(schedule: any) {
+  temporaryModalSchedule.value = schedule
+  temporaryLimitValue.value = schedule.dailyLimit || 500
+  temporaryDaysValue.value = 7
+  showTemporaryModal.value = true
+}
+
+async function applyIncreaseLimit() {
+  if (!increaseModalSchedule.value) return
+  
+  const { domain, provider } = increaseModalSchedule.value
+  if (!increaseLimitValue.value || increaseLimitValue.value < 0 || increaseLimitValue.value > 2000) {
+    alert('Daily limit must be between 0 and 2000')
+    return
+  }
+  
+  try {
+    warmupActionLoading.value = true
+    const response = await api.post('/admin/warmup/increase-limit', {
+      domain,
+      provider,
+      dailyLimit: increaseLimitValue.value,
+    })
+    alert(response.data.message || 'Warmup limit updated successfully')
+    showIncreaseModal.value = false
+    await loadWarmupStatus()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to update warmup limit'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to update warmup limit:', error)
+  } finally {
+    warmupActionLoading.value = false
+  }
+}
+
+async function applyTemporaryIncrease() {
+  if (!temporaryModalSchedule.value) return
+  
+  const { domain, provider } = temporaryModalSchedule.value
+  if (!temporaryLimitValue.value || temporaryLimitValue.value < 0 || temporaryLimitValue.value > 2000) {
+    alert('Daily limit must be between 0 and 2000')
+    return
+  }
+  if (!temporaryDaysValue.value || temporaryDaysValue.value < 1 || temporaryDaysValue.value > 30) {
+    alert('Days must be between 1 and 30')
+    return
+  }
+  
+  try {
+    warmupActionLoading.value = true
+    const response = await api.post('/admin/warmup/increase-limit', {
+      domain,
+      provider,
+      dailyLimit: temporaryLimitValue.value,
+      temporary: true,
+      revertAfterDays: temporaryDaysValue.value,
+    })
+    alert(response.data.message || 'Temporary warmup increase set successfully')
+    showTemporaryModal.value = false
+    await loadWarmupStatus()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to set temporary increase'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to set temporary increase:', error)
+  } finally {
+    warmupActionLoading.value = false
+  }
+}
+
+async function completeWarmup(domain: string, provider: string) {
+  if (!confirm(`⚠️ WARNING: Completing warmup for ${domain} (${provider}) will remove ALL warmup protections.\n\nThis should only be done if your domain is well-established.\n\nAre you sure you want to continue?`)) {
+    return
+  }
+  
+  if (!confirm(`Final confirmation: Remove all warmup protections for ${domain}?`)) {
+    return
+  }
+  
+  try {
+    warmupActionLoading.value = true
+    const response = await api.post('/admin/warmup/complete', {
+      domain,
+      provider,
+      confirm: true,
+    })
+    alert(response.data.message || 'Warmup completed successfully')
+    await loadWarmupStatus()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to complete warmup'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to complete warmup:', error)
+  } finally {
+    warmupActionLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadProviders()
   loadFooterSettings()
   checkQueueStatus()
   loadFailedJobs()
+  loadWarmupStatus()
 })
 </script>
 

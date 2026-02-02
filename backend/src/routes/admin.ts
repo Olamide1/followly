@@ -89,6 +89,217 @@ router.get('/queue/status', async (_req: Request, res: Response, next: NextFunct
 });
 
 /**
+ * Get current warmup schedule status for user's domains
+ * GET /api/admin/warmup/status
+ */
+router.get('/warmup/status', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const { WarmupService } = await import('../services/warmup');
+    const warmupService = new WarmupService();
+    
+    // Get all active providers for this user
+    const providers = await pool.query(
+      `SELECT DISTINCT 
+        SUBSTRING(from_email FROM '@(.*)$')::text as domain,
+        provider
+       FROM provider_configs
+       WHERE user_id = $1 AND is_active = true AND from_email IS NOT NULL`,
+      [userId]
+    );
+    
+    const warmupStatuses = await Promise.all(
+      providers.rows.map(async (row: any) => {
+        const schedule = await warmupService.getWarmupSchedule(userId, row.domain, row.provider);
+        const dailyLimit = schedule ? await warmupService.getDailyLimit(userId, row.domain, row.provider) : null;
+        
+        // Calculate hourly limit based on current calculation
+        const hourlyLimit = dailyLimit ? Math.max(2, Math.floor(dailyLimit / 12)) : null;
+        
+        return {
+          domain: row.domain,
+          provider: row.provider,
+          inWarmup: !!schedule,
+          phase: schedule?.phase || null,
+          dailyLimit: dailyLimit,
+          hourlyLimit: hourlyLimit,
+          currentCount: schedule?.current_count || 0,
+          remainingToday: dailyLimit ? Math.max(0, dailyLimit - (schedule?.current_count || 0)) : null,
+          startDate: schedule?.start_date || null,
+          status: schedule?.status || null,
+        };
+      })
+    );
+    
+    res.json({
+      warmupSchedules: warmupStatuses,
+      summary: {
+        totalDomains: warmupStatuses.length,
+        domainsInWarmup: warmupStatuses.filter(s => s.inWarmup).length,
+        totalRemainingToday: warmupStatuses.reduce((sum, s) => sum + (s.remainingToday || 0), 0),
+      },
+    });
+  } catch (error: any) {
+    return next(error);
+  }
+});
+
+/**
+ * Temporarily increase warmup limit for urgent sends (keeps warmup active, auto-monitors)
+ * POST /api/admin/warmup/increase-limit
+ * Body: { domain: string, provider: string, dailyLimit: number, temporary?: boolean, revertAfterDays?: number }
+ */
+router.post('/warmup/increase-limit', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const { domain, provider, dailyLimit, temporary, revertAfterDays } = req.body;
+    
+    if (!domain || !provider || dailyLimit === undefined) {
+      return res.status(400).json({ error: 'domain, provider, and dailyLimit are required' });
+    }
+    
+    if (dailyLimit < 0 || dailyLimit > 2000) {
+      return res.status(400).json({ error: 'dailyLimit must be between 0 and 2000' });
+    }
+    
+    const { WarmupService } = await import('../services/warmup');
+    const warmupService = new WarmupService();
+    
+    // Get or create warmup schedule
+    let schedule = await warmupService.getWarmupSchedule(userId, domain, provider);
+    if (!schedule) {
+      await warmupService.ensureWarmupSchedule(userId, domain, provider);
+      schedule = await warmupService.getWarmupSchedule(userId, domain, provider);
+    }
+    
+    if (!schedule) {
+      return res.status(404).json({ error: 'Warmup schedule not found' });
+    }
+    
+    // If temporary, use the temporary increase method
+    if (temporary) {
+      const days = revertAfterDays || 7;
+      await warmupService.setTemporaryIncrease(userId, domain, provider, dailyLimit, days);
+      
+      const revertDate = new Date();
+      revertDate.setDate(revertDate.getDate() + days);
+      
+      const newHourlyLimit = Math.max(2, Math.floor(dailyLimit / 12));
+      
+      return res.json({
+        success: true,
+        message: `Temporary warmup limit set for ${domain} (${provider})`,
+        domain,
+        provider,
+        newDailyLimit: dailyLimit,
+        newHourlyLimit,
+        temporary: true,
+        revertsOn: revertDate.toISOString(),
+        warning: 'Warmup monitoring is still active. Limits will auto-reduce if bounce/complaint rates spike.',
+      });
+    }
+    
+    // Permanent increase (still keeps warmup active)
+    await pool.query(
+      'UPDATE warmup_schedules SET daily_limit = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [dailyLimit, schedule.id]
+    );
+    
+    const newHourlyLimit = Math.max(2, Math.floor(dailyLimit / 12));
+    
+    res.json({
+      success: true,
+      message: `Warmup limit updated for ${domain} (${provider})`,
+      domain,
+      provider,
+      newDailyLimit: dailyLimit,
+      newHourlyLimit,
+      temporary: false,
+      warning: dailyLimit > 500 
+        ? 'High limit set - warmup monitoring is still active and will auto-reduce if bounce/complaint rates spike' 
+        : 'Warmup monitoring is still active to protect your domain reputation',
+    });
+  } catch (error: any) {
+    return next(error);
+  }
+});
+
+/**
+ * Fast-track warmup to Phase 3 (500/day) - safer middle ground
+ * POST /api/admin/warmup/fast-track
+ * Body: { domain: string, provider: string }
+ */
+router.post('/warmup/fast-track', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const { domain, provider } = req.body;
+    
+    if (!domain || !provider) {
+      return res.status(400).json({ error: 'domain and provider are required' });
+    }
+    
+    const { WarmupService } = await import('../services/warmup');
+    const warmupService = new WarmupService();
+    
+    await warmupService.fastTrackWarmup(userId, domain, provider);
+    
+    const hourlyLimit = Math.max(2, Math.floor(500 / 12)); // ~41/hour
+    
+    res.json({
+      success: true,
+      message: `Warmup fast-tracked to Phase 3 (500/day) for ${domain} (${provider})`,
+      domain,
+      provider,
+      newDailyLimit: 500,
+      newHourlyLimit: hourlyLimit,
+      phase: 3,
+      warning: 'Warmup monitoring is still active. System will auto-reduce limits if bounce/complaint rates exceed safe thresholds.',
+    });
+  } catch (error: any) {
+    return next(error);
+  }
+});
+
+/**
+ * Complete warmup early (removes warmup restrictions) - USE WITH CAUTION
+ * POST /api/admin/warmup/complete
+ * Body: { domain: string, provider: string, confirm: boolean }
+ */
+router.post('/warmup/complete', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const { domain, provider, confirm } = req.body;
+    
+    if (!domain || !provider) {
+      return res.status(400).json({ error: 'domain and provider are required' });
+    }
+    
+    if (confirm !== true) {
+      return res.status(400).json({ 
+        error: 'Must confirm by setting confirm: true',
+        warning: 'Completing warmup removes all protections. Only do this if your domain is well-established and you understand the risks.',
+        recommendation: 'Consider using /warmup/fast-track instead for safer increased limits',
+      });
+    }
+    
+    const { WarmupService } = await import('../services/warmup');
+    const warmupService = new WarmupService();
+    
+    await warmupService.completeWarmup(userId, domain, provider);
+    
+    res.json({
+      success: true,
+      message: `Warmup completed for ${domain} (${provider}). No more warmup restrictions.`,
+      domain,
+      provider,
+      warning: 'All warmup protections removed. Monitor your domain reputation manually.',
+    });
+  } catch (error: any) {
+    return next(error);
+  }
+});
+
+/**
  * Get email queue diagnostics - check if emails are being processed
  * GET /api/admin/emails/diagnostics
  */

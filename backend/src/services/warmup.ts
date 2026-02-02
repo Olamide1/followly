@@ -64,10 +64,11 @@ export class WarmupService {
       // ESPs (Resend, Brevo, Mailjet) have higher limits, SMTP/Nodemailer is more conservative
       const isESP = ['resend', 'brevo', 'mailjet'].includes(normalizedProvider);
       
-      // Phase 1: Start small
+      // Phase 1: Start small but reasonable
       // ESPs: 100 emails/day (they handle reputation)
-      // SMTP: 20 emails/day (more conservative for direct SMTP)
-      const initialLimit = isESP ? 100 : 20;
+      // SMTP: 50 emails/day (increased from 20 - allows ~2/hour which is safe for warmup)
+      // Industry standard: 20-50/day for new domains, we use 50 for better usability
+      const initialLimit = isESP ? 100 : 50;
 
       const result = await pool.query(
         `INSERT INTO warmup_schedules 
@@ -251,6 +252,133 @@ export class WarmupService {
       }
       console.error(`[Warmup] Error updating metrics:`, error?.message || error);
       throw new Error(`Failed to update metrics: ${error?.message || 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Fast-track warmup to Phase 3 (500/day) - safer than completing, still monitors reputation
+   */
+  async fastTrackWarmup(userId: number, domain: string, provider: string): Promise<void> {
+    this.validateInputs(userId, domain, provider);
+    const normalizedDomain = domain.trim().toLowerCase();
+    const normalizedProvider = provider.trim().toLowerCase();
+
+    try {
+      const result = await pool.query(
+        `UPDATE warmup_schedules 
+         SET phase = 3, daily_limit = 500, updated_at = CURRENT_TIMESTAMP 
+         WHERE user_id = $1 AND domain = $2 AND provider = $3 
+         RETURNING id`,
+        [userId, normalizedDomain, normalizedProvider]
+      );
+
+      if (result.rows.length === 0) {
+        throw new Error(`No warmup schedule found for domain ${normalizedDomain} with provider ${normalizedProvider}`);
+      }
+      
+      console.log(`[Warmup] Fast-tracked ${normalizedDomain} (${normalizedProvider}) to Phase 3 (500/day)`);
+    } catch (error: any) {
+      if (error.message.includes('Invalid') || error.message.includes('No warmup schedule')) {
+        throw error;
+      }
+      console.error(`[Warmup] Error fast-tracking warmup:`, error?.message || error);
+      throw new Error(`Failed to fast-track warmup: ${error?.message || 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Set temporary increase with auto-revert date
+   */
+  async setTemporaryIncrease(
+    userId: number, 
+    domain: string, 
+    provider: string, 
+    dailyLimit: number, 
+    revertAfterDays: number = 7
+  ): Promise<void> {
+    this.validateInputs(userId, domain, provider);
+    const normalizedDomain = domain.trim().toLowerCase();
+    const normalizedProvider = provider.trim().toLowerCase();
+
+    if (dailyLimit < 0 || dailyLimit > 2000) {
+      throw new Error('dailyLimit must be between 0 and 2000');
+    }
+    if (revertAfterDays < 1 || revertAfterDays > 30) {
+      throw new Error('revertAfterDays must be between 1 and 30');
+    }
+
+    try {
+      const revertDate = new Date();
+      revertDate.setDate(revertDate.getDate() + revertAfterDays);
+
+      const result = await pool.query(
+        `UPDATE warmup_schedules 
+         SET daily_limit = $1, 
+             metrics = COALESCE(metrics, '{}'::jsonb) || jsonb_build_object('temporaryIncrease', true, 'originalLimit', daily_limit, 'revertDate', $2::text),
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE user_id = $3 AND domain = $4 AND provider = $5 
+         RETURNING id`,
+        [dailyLimit, revertDate.toISOString(), userId, normalizedDomain, normalizedProvider]
+      );
+
+      if (result.rows.length === 0) {
+        throw new Error(`No warmup schedule found for domain ${normalizedDomain} with provider ${normalizedProvider}`);
+      }
+      
+      console.log(`[Warmup] Set temporary increase for ${normalizedDomain} (${normalizedProvider}): ${dailyLimit}/day, reverts on ${revertDate.toISOString()}`);
+    } catch (error: any) {
+      if (error.message.includes('Invalid') || error.message.includes('No warmup schedule')) {
+        throw error;
+      }
+      console.error(`[Warmup] Error setting temporary increase:`, error?.message || error);
+      throw new Error(`Failed to set temporary increase: ${error?.message || 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Check and revert temporary increases that have expired
+   */
+  async checkAndRevertTemporaryIncreases(): Promise<void> {
+    try {
+      const schedules = await pool.query(
+        `SELECT id, user_id, domain, provider, daily_limit, metrics 
+         FROM warmup_schedules 
+         WHERE metrics->>'temporaryIncrease' = 'true' 
+         AND metrics->>'revertDate' IS NOT NULL`
+      );
+
+      const now = new Date();
+      let reverted = 0;
+
+      for (const schedule of schedules.rows) {
+        const metrics = schedule.metrics || {};
+        const revertDateStr = metrics.revertDate;
+        
+        if (revertDateStr) {
+          const revertDate = new Date(revertDateStr);
+          if (revertDate <= now) {
+            const originalLimit = metrics.originalLimit || 50; // Default to Phase 1 if not set
+            
+            await pool.query(
+              `UPDATE warmup_schedules 
+               SET daily_limit = $1, 
+                   metrics = metrics - 'temporaryIncrease' - 'originalLimit' - 'revertDate',
+                   updated_at = CURRENT_TIMESTAMP 
+               WHERE id = $2`,
+              [originalLimit, schedule.id]
+            );
+            
+            console.log(`[Warmup] Reverted temporary increase for ${schedule.domain} (${schedule.provider}) back to ${originalLimit}/day`);
+            reverted++;
+          }
+        }
+      }
+
+      if (reverted > 0) {
+        console.log(`[Warmup] Reverted ${reverted} temporary warmup increases`);
+      }
+    } catch (error: any) {
+      console.error(`[Warmup] Error checking temporary increases:`, error?.message || error);
     }
   }
 
