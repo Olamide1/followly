@@ -89,6 +89,94 @@ router.get('/queue/status', async (_req: Request, res: Response, next: NextFunct
 });
 
 /**
+ * Get email queue diagnostics - check if emails are being processed
+ * GET /api/admin/emails/diagnostics
+ */
+router.get('/emails/diagnostics', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const { getEmailQueue, isEmailQueuePaused } = await import('../services/queues');
+    
+    // Check if queue is paused
+    const paused = await isEmailQueuePaused();
+    
+    // Get queue job counts
+    let queueCounts = null;
+    try {
+      const emailQueue = getEmailQueue();
+      queueCounts = await emailQueue.getJobCounts();
+    } catch (error: any) {
+      console.error('Could not get queue counts:', error);
+    }
+    
+    // Get email status breakdown from database
+    const statusResult = await pool.query(
+      `SELECT 
+        status,
+        COUNT(*) as count
+       FROM email_queue
+       WHERE user_id = $1
+       GROUP BY status
+       ORDER BY status`,
+      [userId]
+    );
+    
+    const statusCounts: Record<string, number> = {};
+    statusResult.rows.forEach((row: any) => {
+      statusCounts[row.status] = parseInt(row.count || '0');
+    });
+    
+    // Get recent email activity (last hour)
+    const recentActivity = await pool.query(
+      `SELECT 
+        status,
+        COUNT(*) as count
+       FROM email_queue
+       WHERE user_id = $1 
+         AND (sent_at > NOW() - INTERVAL '1 hour' OR created_at > NOW() - INTERVAL '1 hour')
+       GROUP BY status`,
+      [userId]
+    );
+    
+    const recentCounts: Record<string, number> = {};
+    recentActivity.rows.forEach((row: any) => {
+      recentCounts[row.status] = parseInt(row.count || '0');
+    });
+    
+    // Get campaigns in sending state
+    const sendingCampaigns = await pool.query(
+      `SELECT 
+        id,
+        name,
+        status,
+        created_at,
+        updated_at
+       FROM campaigns
+       WHERE user_id = $1 AND status = 'sending'
+       ORDER BY updated_at DESC`,
+      [userId]
+    );
+    
+    res.json({
+      queuePaused: paused,
+      queueCounts,
+      emailStatusCounts: statusCounts,
+      recentActivity: recentCounts,
+      sendingCampaigns: sendingCampaigns.rows,
+      diagnostics: {
+        totalEmails: Object.values(statusCounts).reduce((sum, count) => sum + count, 0),
+        pendingEmails: (statusCounts.pending || 0) + (statusCounts.queued || 0) + (statusCounts.sending || 0),
+        sentEmails: statusCounts.sent || 0,
+        failedEmails: statusCounts.failed || 0,
+        queueActive: !paused && queueCounts && (queueCounts.waiting > 0 || queueCounts.active > 0),
+      },
+    });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+/**
  * Get pending emails from database (works without Bull queue access)
  * GET /api/admin/emails/pending
  */

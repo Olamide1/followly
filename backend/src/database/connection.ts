@@ -26,6 +26,8 @@ const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
+  // Allow waiting for connections when pool is exhausted
+  allowExitOnIdle: false,
 });
 
 pool.on('error', (err) => {

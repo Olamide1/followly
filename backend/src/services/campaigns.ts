@@ -388,12 +388,14 @@ export class CampaignService {
       }
       
       // No emails queued but status is "sending" - this is a stuck state
-      // Reset to draft and proceed with sending
+      // Reset to draft and proceed with sending (this is a retry scenario)
       console.log(`[Campaign Send] Campaign ${campaignId} was stuck in "sending" state, resetting and retrying`);
       await pool.query(
         'UPDATE campaigns SET status = $1 WHERE id = $2',
         ['draft', campaignId]
       );
+      // Update local campaign object to reflect the reset
+      campaign.status = 'draft';
     }
 
     // Validate list_id
@@ -415,115 +417,123 @@ export class CampaignService {
       ['sending', campaignId]
     );
 
-    // Queue emails in batches to avoid memory issues and improve performance
+    // Queue emails sequentially to avoid database connection pool exhaustion
+    // This prevents "max clients reached" errors when processing large campaigns
     const emailQueue = getEmailQueue();
     const fromEmail = campaign.from_email || process.env.DEFAULT_FROM_EMAIL || '';
-    const BATCH_SIZE = 50; // Process contacts in batches of 50
     let queuedCount = 0;
 
-    // Process contacts in batches
-    for (let i = 0; i < listContacts.length; i += BATCH_SIZE) {
-      const batch = listContacts.slice(i, i + BATCH_SIZE);
-      const batchPromises = batch.map(async (contact) => {
-        // Check suppression
-        const suppressed = await pool.query(
-          'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
-          [userId, contact.email]
-        );
+    // Process contacts sequentially to avoid database connection pool exhaustion
+    // This is slower but prevents "max clients reached" errors
+    try {
+      for (const contact of listContacts) {
+        try {
+          // Check suppression
+          const suppressed = await pool.query(
+            'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
+            [userId, contact.email]
+          );
 
-        if (suppressed.rows.length > 0) {
-          return null; // Skip suppressed contacts
-        }
-
-        // Personalize content
-        const personalizationData = {
-          name: contact.name || '',
-          company: contact.company || '',
-          email: contact.email,
-        };
-
-        // Personalize subject and content - handle both {{name}} and {{ name }} syntax
-        const personalizedSubject = this.personalizationService.renderTemplate(
-          campaign.subject,
-          personalizationData
-        );
-        let personalizedContent = this.personalizationService.renderTemplate(
-          campaign.content,
-          personalizationData
-        );
-
-        // Append unsubscribe footer automatically
-        const { appendUnsubscribeFooter } = await import('./unsubscribe');
-        personalizedContent = await appendUnsubscribeFooter(
-          userId,
-          contact.email,
-          personalizedContent,
-          {
-            includePreferences: true,
-            includeViewInBrowser: false,
+          if (suppressed.rows.length > 0) {
+            continue; // Skip suppressed contacts
           }
-        );
 
-        // Determine send time (spread out)
-        const sendDelay = Math.floor(Math.random() * 3600); // Random delay up to 1 hour
-        const scheduledAt = new Date(Date.now() + sendDelay * 1000);
+          // Personalize content
+          const personalizationData = {
+            name: contact.name || '',
+            company: contact.company || '',
+            email: contact.email,
+          };
 
-        // Create email_queue record upfront for tracking
-        const emailQueueResult = await pool.query(
-          `INSERT INTO email_queue 
-           (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           RETURNING id`,
-          [
+          // Personalize subject and content - handle both {{name}} and {{ name }} syntax
+          const personalizedSubject = this.personalizationService.renderTemplate(
+            campaign.subject,
+            personalizationData
+          );
+          let personalizedContent = this.personalizationService.renderTemplate(
+            campaign.content,
+            personalizationData
+          );
+
+          // Append unsubscribe footer automatically
+          const { appendUnsubscribeFooter } = await import('./unsubscribe');
+          personalizedContent = await appendUnsubscribeFooter(
             userId,
-            contact.id,
-            campaignId,
             contact.email,
-            personalizedSubject,
             personalizedContent,
+            {
+              includePreferences: true,
+              includeViewInBrowser: false,
+            }
+          );
+
+          // Determine send time (spread out)
+          const sendDelay = Math.floor(Math.random() * 3600); // Random delay up to 1 hour
+          const scheduledAt = new Date(Date.now() + sendDelay * 1000);
+
+          // Create email_queue record upfront for tracking
+          const emailQueueResult = await pool.query(
+            `INSERT INTO email_queue 
+             (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING id`,
+            [
+              userId,
+              contact.id,
+              campaignId,
+              contact.email,
+              personalizedSubject,
+              personalizedContent,
+              fromEmail,
+              campaign.from_name || process.env.DEFAULT_FROM_NAME,
+              'queued',
+              scheduledAt,
+            ]
+          );
+          const emailQueueId = emailQueueResult.rows[0].id;
+
+          // Add to Bull queue with email_queue_id for reference
+          await emailQueue.add({
+            userId,
+            contactId: contact.id,
+            campaignId,
+            emailQueueId, // Include email_queue_id in job data
+            toEmail: contact.email,
+            subject: personalizedSubject,
+            content: personalizedContent,
             fromEmail,
-            campaign.from_name || process.env.DEFAULT_FROM_NAME,
-            'queued',
-            scheduledAt,
-          ]
-        );
-        const emailQueueId = emailQueueResult.rows[0].id;
+            fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
+            scheduledAt: scheduledAt.toISOString(),
+          }, {
+            delay: sendDelay * 1000,
+            jobId: `email-${emailQueueId}`, // Use email_queue_id as job ID for easy lookup
+          });
 
-        // Add to Bull queue with email_queue_id for reference
-        await emailQueue.add({
-          userId,
-          contactId: contact.id,
-          campaignId,
-          emailQueueId, // Include email_queue_id in job data
-          toEmail: contact.email,
-          subject: personalizedSubject,
-          content: personalizedContent,
-          fromEmail,
-          fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
-          scheduledAt: scheduledAt.toISOString(),
-        }, {
-          delay: sendDelay * 1000,
-          jobId: `email-${emailQueueId}`, // Use email_queue_id as job ID for easy lookup
-        });
+          queuedCount++;
 
-        return emailQueueId;
-      });
-
-      // Wait for batch to complete before processing next batch
-      const batchResults = await Promise.all(batchPromises);
-      queuedCount += batchResults.filter(id => id !== null).length;
-
-      // Log progress for large campaigns
-      if (listContacts.length > 100) {
-        console.log(`[Campaign Send] Processed ${Math.min(i + BATCH_SIZE, listContacts.length)}/${listContacts.length} contacts for campaign ${campaignId}`);
+          // Log progress for large campaigns every 50 contacts
+          if (queuedCount % 50 === 0) {
+            console.log(`[Campaign Send] Processed ${queuedCount}/${listContacts.length} contacts for campaign ${campaignId}`);
+          }
+        } catch (contactError: any) {
+          // Log error but continue with next contact
+          console.error(`[Campaign Send] Failed to queue email for contact ${contact.id} (${contact.email}):`, contactError?.message || contactError);
+        }
       }
+    } catch (error: any) {
+      // If batch processing fails completely, reset campaign status
+      console.error(`[Campaign Send] Failed to queue emails for campaign ${campaignId}:`, error);
+      await pool.query(
+        'UPDATE campaigns SET status = $1 WHERE id = $2',
+        ['draft', campaignId]
+      );
+      throw createError(`Failed to queue campaign emails: ${error?.message || 'Unknown error'}`, 500);
     }
 
-    // Mark campaign as sent
-    await pool.query(
-      'UPDATE campaigns SET status = $1, sent_at = CURRENT_TIMESTAMP WHERE id = $2',
-      ['sent', campaignId]
-    );
+    // Keep campaign status as "sending" - don't mark as "sent" until emails are actually delivered
+    // The campaign will be marked as "sent" automatically when all emails are processed
+    // This is handled by the checkAndUpdateCampaignStatus function called periodically
+    console.log(`[Campaign Send] Queued ${queuedCount} emails for campaign ${campaignId}. Campaign remains in "sending" status until emails are delivered.`);
 
     return { queued: queuedCount };
   }
@@ -852,6 +862,66 @@ export class CampaignService {
     }
 
     return { recovered, errors };
+  }
+
+  /**
+   * Verify if a campaign's emails were actually delivered
+   * Returns detailed status about email delivery
+   */
+  async verifyCampaignDelivery(userId: number, campaignId: number) {
+    const campaign = await this.getCampaign(userId, campaignId);
+    
+    // Get all emails for this campaign
+    const emailsResult = await pool.query(
+      `SELECT 
+        status,
+        COUNT(*) as count
+       FROM email_queue
+       WHERE campaign_id = $1 AND user_id = $2
+       GROUP BY status`,
+      [campaignId, userId]
+    );
+    
+    const statusCounts: Record<string, number> = {};
+    emailsResult.rows.forEach((row: any) => {
+      statusCounts[row.status] = parseInt(row.count || '0');
+    });
+    
+    const totalEmails = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
+    const sentEmails = statusCounts.sent || 0;
+    const pendingEmails = (statusCounts.pending || 0) + (statusCounts.queued || 0) + (statusCounts.sending || 0);
+    const failedEmails = statusCounts.failed || 0;
+    const bouncedEmails = statusCounts.bounced || 0;
+    
+    // Campaign is considered "actually sent" if:
+    // 1. All emails are in final states (no pending/queued/sending)
+    // 2. At least one email was successfully sent
+    const allEmailsProcessed = pendingEmails === 0;
+    const hasSentEmails = sentEmails > 0;
+    const actuallySent = allEmailsProcessed && hasSentEmails;
+    
+    // Check if campaign status matches reality
+    const statusMatches = campaign.status === 'sent' ? actuallySent : true;
+    
+    return {
+      campaignId,
+      campaignStatus: campaign.status,
+      totalEmails,
+      sentEmails,
+      pendingEmails,
+      failedEmails,
+      bouncedEmails,
+      statusCounts,
+      actuallySent,
+      statusMatches,
+      message: actuallySent 
+        ? 'Campaign emails have been delivered'
+        : pendingEmails > 0
+        ? `${pendingEmails} emails are still being processed`
+        : sentEmails === 0
+        ? 'No emails were successfully sent'
+        : 'Campaign delivery status unclear',
+    };
   }
 }
 

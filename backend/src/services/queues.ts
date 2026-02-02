@@ -666,6 +666,48 @@ function startQueueCleanup(): void {
 }
 
 /**
+ * Check and update campaign status based on actual email delivery
+ * Marks campaigns as "sent" only when all emails are actually sent (not just queued)
+ */
+async function checkAndUpdateCampaignStatus(): Promise<void> {
+  try {
+    const { pool } = await import('../database/connection');
+    
+    // Find campaigns in "sending" state that have all emails actually sent
+    // A campaign is considered "sent" when:
+    // 1. All emails are in final states (sent, failed, bounced, complained) - no pending/queued/sending
+    // 2. At least one email was successfully sent (status = 'sent')
+    const result = await pool.query(
+      `UPDATE campaigns c
+       SET status = 'sent', sent_at = COALESCE(c.sent_at, CURRENT_TIMESTAMP)
+       WHERE c.status = 'sending'
+         AND EXISTS (
+           -- Campaign has at least one sent email
+           SELECT 1 FROM email_queue eq
+           WHERE eq.campaign_id = c.id AND eq.status = 'sent'
+         )
+         AND NOT EXISTS (
+           -- No emails still pending/queued/sending
+           SELECT 1 FROM email_queue eq
+           WHERE eq.campaign_id = c.id
+             AND eq.status IN ('pending', 'queued', 'sending')
+         )
+       RETURNING c.id, c.name, c.user_id`,
+      []
+    );
+    
+    if (result.rows.length > 0) {
+      console.log(`[Campaign Status] Marked ${result.rows.length} campaigns as "sent" (all emails delivered)`);
+      result.rows.forEach((row: any) => {
+        console.log(`[Campaign Status] Campaign ${row.id} (${row.name}) for user ${row.user_id} is now marked as sent`);
+      });
+    }
+  } catch (error: any) {
+    console.error('[Campaign Status] Failed to check and update campaign status:', error?.message || error);
+  }
+}
+
+/**
  * Recover stuck campaigns in "sending" state
  * Finds campaigns that have been stuck for more than 10 minutes with no emails queued
  */
@@ -673,7 +715,10 @@ async function recoverStuckCampaigns(): Promise<void> {
   try {
     const { pool } = await import('../database/connection');
     
-    // Find campaigns stuck in "sending" state for more than 10 minutes
+    // First, check and update campaigns that are actually complete
+    await checkAndUpdateCampaignStatus();
+    
+    // Then find campaigns stuck in "sending" state for more than 10 minutes
     // with no pending/queued/sending emails
     const result = await pool.query(
       `UPDATE campaigns c

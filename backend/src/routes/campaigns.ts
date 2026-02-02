@@ -292,6 +292,113 @@ router.get('/:id/stats', async (req: AuthRequest, res: Response, next: NextFunct
   }
 });
 
+// Verify campaign delivery status
+router.get('/:id/verify-delivery', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const verification = await campaignService.verifyCampaignDelivery(
+      req.userId!,
+      parseInt(req.params.id)
+    );
+    res.json(verification);
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Get individual email statuses for a campaign
+router.get('/:id/emails', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const campaignId = parseInt(req.params.id);
+    const limit = parseInt(req.query.limit as string) || 100;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const status = req.query.status as string; // Optional filter by status
+    
+    // Verify campaign belongs to user
+    const campaignCheck = await pool.query(
+      'SELECT id FROM campaigns WHERE id = $1 AND user_id = $2',
+      [campaignId, userId]
+    );
+    
+    if (campaignCheck.rows.length === 0) {
+      res.status(404).json({ error: 'Campaign not found' });
+      return;
+    }
+    
+    // Build query
+    let query = `
+      SELECT 
+        eq.id,
+        eq.to_email,
+        eq.status,
+        eq.scheduled_at,
+        eq.sent_at,
+        eq.error_message,
+        eq.retry_count,
+        eq.provider,
+        eq.created_at,
+        c.name as contact_name,
+        c.email as contact_email
+      FROM email_queue eq
+      LEFT JOIN contacts c ON eq.contact_id = c.id
+      WHERE eq.campaign_id = $1 AND eq.user_id = $2
+    `;
+    const params: any[] = [campaignId, userId];
+    
+    if (status) {
+      query += ` AND eq.status = $3`;
+      params.push(status);
+    }
+    
+    query += ` ORDER BY eq.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+    
+    const result = await pool.query(query, params);
+    
+    // Get total count
+    let countQuery = `
+      SELECT COUNT(*) as total
+      FROM email_queue
+      WHERE campaign_id = $1 AND user_id = $2
+    `;
+    const countParams: any[] = [campaignId, userId];
+    
+    if (status) {
+      countQuery += ` AND status = $3`;
+      countParams.push(status);
+    }
+    
+    const countResult = await pool.query(countQuery, countParams);
+    const total = parseInt(countResult.rows[0]?.total || '0');
+    
+    // Get status breakdown
+    const statusBreakdown = await pool.query(
+      `SELECT 
+        status,
+        COUNT(*) as count
+       FROM email_queue
+       WHERE campaign_id = $1 AND user_id = $2
+       GROUP BY status`,
+      [campaignId, userId]
+    );
+    
+    const statusCounts: Record<string, number> = {};
+    statusBreakdown.rows.forEach((row: any) => {
+      statusCounts[row.status] = parseInt(row.count || '0');
+    });
+    
+    res.json({
+      emails: result.rows,
+      total,
+      limit,
+      offset,
+      statusCounts,
+    });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
 // Recover campaign emails (re-queue failed or missing emails)
 router.post('/:id/recover', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
