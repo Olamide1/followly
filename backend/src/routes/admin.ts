@@ -192,7 +192,7 @@ router.get('/campaign-send/failed', async (_req: Request, res: Response, next: N
       jobs: failedJobsDetails,
     });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -226,7 +226,7 @@ router.post('/campaign-send/clean-failed', async (_req: Request, res: Response, 
       message: `Removed ${cleaned} failed jobs`,
     });
   } catch (error: any) {
-    next(error);
+    return next(error);
   }
 });
 
