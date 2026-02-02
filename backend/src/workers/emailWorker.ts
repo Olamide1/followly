@@ -5,6 +5,7 @@ import { EmailProviderService, ProviderConfig, ProviderType } from '../services/
 import { WarmupService } from '../services/warmup';
 import { RateLimiterService } from '../services/rateLimiter';
 import { DomainReputationService } from '../services/domainReputation';
+import { CircuitBreakerService } from '../services/circuitBreaker';
 import {
   generateTrackingToken,
   storeTrackingToken,
@@ -18,6 +19,7 @@ let routingService: RoutingService | null = null;
 let warmupService: WarmupService | null = null;
 let rateLimiterService: RateLimiterService | null = null;
 let domainReputationService: DomainReputationService | null = null;
+let circuitBreakerService: CircuitBreakerService | null = null;
 
 // Cache provider services per user (to avoid reloading on every email)
 const userProviderServices: Map<number, EmailProviderService> = new Map();
@@ -495,6 +497,42 @@ export async function processEmailQueue(job: Job) {
     if (!domainReputationService) {
       domainReputationService = new DomainReputationService();
     }
+    if (!circuitBreakerService) {
+      circuitBreakerService = new CircuitBreakerService();
+    }
+
+    // Check circuit breaker BEFORE processing (domain-specific protection)
+    const circuitCheck = await circuitBreakerService.isCircuitOpen(domain);
+    if (circuitCheck.isOpen) {
+      const resetAt = circuitCheck.resetAt || new Date(Date.now() + 3600000);
+      const delayMs = Math.max(0, resetAt.getTime() - Date.now());
+      
+      console.error(
+        `[CircuitBreaker] ⚠️ Circuit is OPEN for domain ${domain}. ` +
+        `Email sending paused. Reason: ${circuitCheck.reason}. ` +
+        `Will retry after ${resetAt.toISOString()}`
+      );
+      
+      // Update email_queue status
+      if (finalEmailQueueId) {
+        await pool.query(
+          `UPDATE email_queue 
+           SET status = 'queued', 
+               error_message = $1,
+               scheduled_at = $2
+           WHERE id = $3`,
+          [
+            `Circuit breaker open: ${circuitCheck.reason}. Sending paused for this domain.`,
+            resetAt,
+            finalEmailQueueId
+          ]
+        );
+      }
+      
+      // Delay the job until circuit resets
+      await safelyDelayJob(job, delayMs, `Circuit breaker open for domain ${domain}`);
+      return; // Don't process this email
+    }
 
     // Load user's providers from database
     const providerService = await loadUserProviders(userId);
@@ -797,12 +835,122 @@ export async function processEmailQueue(job: Job) {
       });
     }
 
+    // Record successful send in circuit breaker (resets failure count)
+    if (circuitBreakerService) {
+      await circuitBreakerService.recordSuccess(domain);
+    }
+
     return result;
   } catch (error: any) {
     console.error('Email send error:', error);
 
+    // EARLY WARNING: Detect EAUTH failures BEFORE they lead to account locks
+    // Auth failures are often the first sign of account issues
+    const isAuthFailure = (error as any).isAuthFailure || 
+                         error.code === 'EAUTH' ||
+                         error.message?.toLowerCase().includes('authentication failed') ||
+                         error.message?.toLowerCase().includes('eauth');
+
+    // Record auth failures as early warning signs (domain-specific)
+    if (isAuthFailure && circuitBreakerService && domain) {
+      const reason = `SMTP authentication failed: ${error.message || 'EAUTH error detected'}`;
+      await circuitBreakerService.recordAuthFailure(domain, reason);
+      
+      // Check if circuit just opened due to auth failures
+      const circuitStatus = await circuitBreakerService.getStatus(domain);
+      if (circuitStatus.isOpen && circuitStatus.triggeredBy === 'auth_failure') {
+        console.error(
+          `[CircuitBreaker] ⚠️ CIRCUIT OPENED (EARLY WARNING) for domain ${domain} after ${circuitStatus.authFailureCount} EAUTH failures. ` +
+          `This may prevent account lock. Sending paused until ${circuitStatus.resetAt?.toISOString()}. ` +
+          `Reason: ${circuitStatus.reason}`
+        );
+        
+        // Update email_queue status
+        if (finalEmailQueueId) {
+          await pool.query(
+            `UPDATE email_queue 
+             SET status = 'queued', 
+                 error_message = $1,
+                 scheduled_at = $2
+             WHERE id = $3`,
+            [
+              `Early warning: Authentication failures detected (${circuitStatus.authFailureCount}/2). Circuit opened to prevent account lock. Sending paused for this domain.`,
+              circuitStatus.resetAt,
+              finalEmailQueueId
+            ]
+          );
+        }
+        
+        // Delay all future emails for this domain until circuit resets
+        const delayMs = circuitStatus.resetAt 
+          ? Math.max(0, circuitStatus.resetAt.getTime() - Date.now())
+          : 3600000; // Default 1 hour
+        
+        await safelyDelayJob(job, delayMs, `Circuit breaker opened (early warning) for domain ${domain} due to auth failures`);
+        return; // Don't retry - circuit is open
+      }
+    }
+
+    // Check for critical errors that should trigger circuit breaker (domain-specific)
+    const isAccountLocked = (error as any).isAccountLocked || 
+                            error.message?.toLowerCase().includes('account has been locked') ||
+                            error.message?.toLowerCase().includes('account locked');
+    
+    const isDomainExceeded = (error as any).isDomainExceeded ||
+                             (error.message?.toLowerCase().includes('domain') && 
+                              error.message?.toLowerCase().includes('exceeded')) ||
+                             (error.message?.toLowerCase().includes('max defers') ||
+                              error.message?.toLowerCase().includes('max failures'));
+    
+    const isCriticalError = (error as any).isCriticalError || isAccountLocked || isDomainExceeded;
+
+    // Record critical failures in circuit breaker (domain-specific)
+    if (isCriticalError && circuitBreakerService && domain) {
+      const reason = isAccountLocked 
+        ? 'Account has been locked by mail server'
+        : isDomainExceeded
+        ? 'Domain has exceeded max defers and failures per hour'
+        : 'Critical SMTP error detected';
+      
+      await circuitBreakerService.recordCriticalFailure(domain, reason);
+      
+      // Check if circuit just opened
+      const circuitStatus = await circuitBreakerService.getStatus(domain);
+      if (circuitStatus.isOpen) {
+        console.error(
+          `[CircuitBreaker] ⚠️ CIRCUIT OPENED for domain ${domain} after ${circuitStatus.failureCount} failures. ` +
+          `All emails for this domain will be paused until ${circuitStatus.resetAt?.toISOString()}. ` +
+          `Reason: ${circuitStatus.reason}`
+        );
+        
+        // Update email_queue status
+        if (finalEmailQueueId) {
+          await pool.query(
+            `UPDATE email_queue 
+             SET status = 'queued', 
+                 error_message = $1,
+                 scheduled_at = $2
+             WHERE id = $3`,
+            [
+              `Circuit breaker opened: ${circuitStatus.reason}. Sending paused for this domain.`,
+              circuitStatus.resetAt,
+              finalEmailQueueId
+            ]
+          );
+        }
+        
+        // Delay all future emails for this domain until circuit resets
+        const delayMs = circuitStatus.resetAt 
+          ? Math.max(0, circuitStatus.resetAt.getTime() - Date.now())
+          : 3600000; // Default 1 hour
+        
+        await safelyDelayJob(job, delayMs, `Circuit breaker opened for domain ${domain}`);
+        return; // Don't retry - circuit is open
+      }
+    }
+
     // Check if this is a rate limit error (for Nodemailer/SMTP providers)
-    const isRateLimitError = routingDecision && routingDecision.provider === 'nodemailer' && 
+    const isRateLimitError = !isCriticalError && routingDecision && routingDecision.provider === 'nodemailer' && 
       ((error as any).isRateLimitError ||
        error.message?.toLowerCase().includes('exceeded') || 
        error.message?.toLowerCase().includes('rate limit') ||

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { pauseEmailQueue, resumeEmailQueue, isEmailQueuePaused, getQueueJobCounts, getCampaignSendQueue } from '../services/queues';
+import { CircuitBreakerService } from '../services/circuitBreaker';
 import { pool } from '../database/connection';
 
 const router = Router();
@@ -660,6 +661,45 @@ router.post('/campaign-send/clean-failed', async (_req: Request, res: Response, 
       success: true,
       cleaned,
       message: `Removed ${cleaned} failed jobs`,
+    });
+  } catch (error: any) {
+    return next(error);
+  }
+});
+
+/**
+ * Get circuit breaker status for a domain
+ * GET /api/admin/circuit-breaker/:domain
+ */
+router.get('/circuit-breaker/:domain', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const domain = req.params.domain;
+    const circuitBreakerService = new CircuitBreakerService();
+    const status = await circuitBreakerService.getStatus(domain);
+    
+    res.json({
+      domain,
+      ...status,
+    });
+  } catch (error: any) {
+    return next(error);
+  }
+});
+
+/**
+ * Reset circuit breaker for a domain (manual override)
+ * POST /api/admin/circuit-breaker/:domain/reset
+ */
+router.post('/circuit-breaker/:domain/reset', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const domain = req.params.domain;
+    const circuitBreakerService = new CircuitBreakerService();
+    await circuitBreakerService.resetCircuit(domain);
+    
+    res.json({
+      success: true,
+      message: `Circuit breaker reset for domain ${domain}. Sending will resume immediately.`,
+      domain,
     });
   } catch (error: any) {
     return next(error);

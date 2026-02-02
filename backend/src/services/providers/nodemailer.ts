@@ -99,14 +99,32 @@ export class NodemailerProvider {
       const errorResponse = error.response || '';
       const errorResponseLower = errorResponse.toLowerCase();
       
+      // Check for critical errors that should trigger circuit breaker
+      const errorMessageLower = error.message?.toLowerCase() || '';
+      const isAccountLocked = errorResponseLower.includes('account has been locked') ||
+                              errorResponseLower.includes('account locked') ||
+                              errorResponseLower.includes('account is locked') ||
+                              errorMessageLower.includes('account has been locked') ||
+                              errorMessageLower.includes('account locked');
+      
+      const isDomainExceeded = errorResponseLower.includes('domain') && 
+                                (errorResponseLower.includes('exceeded') ||
+                                 errorResponseLower.includes('max defers') ||
+                                 errorResponseLower.includes('max failures')) ||
+                                errorMessageLower.includes('domain') && 
+                                (errorMessageLower.includes('exceeded') ||
+                                 errorMessageLower.includes('max defers') ||
+                                 errorMessageLower.includes('max failures'));
+      
       // Check for rate limit errors in response message
-      const isRateLimitError = errorResponseLower.includes('exceeded') ||
+      const isRateLimitError = !isAccountLocked && !isDomainExceeded && (
+                               errorResponseLower.includes('exceeded') ||
                                errorResponseLower.includes('rate limit') ||
                                errorResponseLower.includes('max emails per hour') ||
                                errorResponseLower.includes('too many emails') ||
                                errorResponseLower.includes('quota exceeded') ||
-                               error.message?.toLowerCase().includes('exceeded') ||
-                               error.message?.toLowerCase().includes('rate limit');
+                               errorMessageLower.includes('exceeded') ||
+                               errorMessageLower.includes('rate limit'));
       
       if (error.code === 'ECONNREFUSED') {
         errorMessage = `Connection refused to ${this.config.host}:${this.config.port}. Check your SMTP host and port settings.`;
@@ -114,13 +132,26 @@ export class NodemailerProvider {
         errorMessage = `Connection timed out to ${this.config.host}:${this.config.port}. The server may be unreachable.`;
       } else if (error.code === 'EAUTH') {
         errorMessage = 'Authentication failed. Check your SMTP username and password.';
+        // Flag EAUTH as early warning sign (auth failures often precede account locks)
+        (error as any).isAuthFailure = true;
       } else if (error.responseCode === 550) {
-        errorMessage = `Recipient rejected: ${error.response || 'Unknown reason'}`;
+        // 550 can mean different things - check the response for specific errors
+        if (isAccountLocked) {
+          errorMessage = `Account locked: ${error.response || 'Your account has been locked. Please contact your administrator.'}`;
+        } else if (isDomainExceeded) {
+          errorMessage = `Domain exceeded failures: ${error.response || 'Domain has exceeded max defers and failures per hour'}`;
+        } else {
+          errorMessage = `Recipient rejected: ${error.response || 'Unknown reason'}`;
+        }
       } else if (error.responseCode === 553) {
         errorMessage = `Invalid sender address: ${error.response || 'Check from_email'}`;
       } else if (error.responseCode === 421 || error.responseCode === 450) {
         // SMTP codes that might indicate rate limiting
         errorMessage = `Service unavailable: ${error.response || 'Rate limit may have been exceeded'}`;
+      } else if (isAccountLocked) {
+        errorMessage = `Account locked: ${error.response || error.message || 'Your account has been locked'}`;
+      } else if (isDomainExceeded) {
+        errorMessage = `Domain exceeded failures: ${error.response || error.message || 'Domain has exceeded max defers and failures per hour'}`;
       } else if (isRateLimitError) {
         // Rate limit error detected
         errorMessage = `Rate limit exceeded: ${error.response || error.message || 'Hourly sending limit reached'}`;
@@ -129,11 +160,30 @@ export class NodemailerProvider {
       }
 
       const finalError = new Error(`Nodemailer send error: ${errorMessage}`);
-      // Preserve rate limit flag
+      
+      // Preserve flags for worker to detect errors
+      if ((error as any).isAuthFailure || error.code === 'EAUTH') {
+        (finalError as any).isAuthFailure = true; // Early warning - auth failures often precede account locks
+      }
+      if (isAccountLocked) {
+        (finalError as any).isAccountLocked = true;
+        (finalError as any).isCriticalError = true;
+      }
+      if (isDomainExceeded) {
+        (finalError as any).isDomainExceeded = true;
+        (finalError as any).isCriticalError = true;
+      }
       if (isRateLimitError) {
         (finalError as any).isRateLimitError = true;
         (finalError as any).responseCode = error.responseCode;
       }
+      if (error.responseCode) {
+        (finalError as any).responseCode = error.responseCode;
+      }
+      if (error.response) {
+        (finalError as any).response = error.response;
+      }
+      
       throw finalError;
     }
   }

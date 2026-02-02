@@ -767,6 +767,21 @@ export class CampaignService {
     const fromEmail = campaign.from_email || process.env.DEFAULT_FROM_EMAIL || '';
     const domain = fromEmail.split('@')[1] || '';
     
+    // CRITICAL: Check circuit breaker BEFORE queuing emails (domain-specific protection)
+    const { CircuitBreakerService } = await import('./circuitBreaker');
+    const circuitBreakerService = new CircuitBreakerService();
+    const circuitCheck = await circuitBreakerService.isCircuitOpen(domain);
+    if (circuitCheck.isOpen) {
+      const resetAt = circuitCheck.resetAt || new Date(Date.now() + 3600000);
+      throw createError(
+        `Circuit breaker is OPEN for domain ${domain}. Email sending is paused. ` +
+        `Reason: ${circuitCheck.reason}. ` +
+        `Will automatically reset after ${resetAt.toISOString()}. ` +
+        `You can manually reset via admin endpoint if needed.`,
+        429 // Too Many Requests
+      );
+    }
+    
     // Get provider and rate limit to calculate proper delays
     let provider: string = 'nodemailer'; // Default
     let hourlyLimit = 41; // Default fallback
