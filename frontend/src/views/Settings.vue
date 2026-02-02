@@ -577,6 +577,86 @@
           Manage domain warmup schedules to safely increase sending capacity. Warmup protects your domain reputation by gradually increasing limits while monitoring bounce and complaint rates.
         </p>
         
+        <!-- Sending Diagnostics -->
+        <div class="mb-8 p-4 border border-grid-light bg-ink-50">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-medium text-ink-900">Sending Diagnostics</h3>
+            <button
+              @click="loadSendingDiagnostics"
+              :disabled="diagnosticsLoading"
+              class="text-xs text-ink-500 hover:text-ink-900 uppercase tracking-wider"
+            >
+              {{ diagnosticsLoading ? 'Loading...' : 'Refresh' }}
+            </button>
+          </div>
+          
+          <div v-if="diagnosticsLoading" class="text-xs text-ink-600 text-center py-4">
+            Loading diagnostics...
+          </div>
+          
+          <div v-else-if="!sendingDiagnostics" class="text-xs text-ink-500 text-center py-2">
+            Diagnostics unavailable (check console for errors)
+          </div>
+          
+          <div v-else-if="sendingDiagnostics" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <p class="text-xs text-ink-500 uppercase tracking-wider mb-1">Sent This Hour</p>
+              <p class="text-lg font-medium text-ink-900">
+                {{ sendingDiagnostics.emails.sentLastHour }}
+                <span class="text-xs text-ink-500">/ {{ sendingDiagnostics.warmup[0]?.warmup.hourlyLimit || 'N/A' }}</span>
+              </p>
+            </div>
+            <div>
+              <p class="text-xs text-ink-500 uppercase tracking-wider mb-1">Sent Today</p>
+              <p class="text-lg font-medium text-ink-900">
+                {{ sendingDiagnostics.emails.sentToday }}
+                <span class="text-xs text-ink-500">/ {{ sendingDiagnostics.warmup[0]?.warmup.dailyLimit || 'N/A' }}</span>
+              </p>
+            </div>
+            <div>
+              <p class="text-xs text-ink-500 uppercase tracking-wider mb-1">Queue Status</p>
+              <p class="text-lg font-medium text-ink-900">
+                <span v-if="sendingDiagnostics.queue.emailQueue.waiting > 0" class="text-yellow-600">
+                  {{ sendingDiagnostics.queue.emailQueue.waiting }} waiting
+                </span>
+                <span v-else-if="sendingDiagnostics.queue.emailQueue.delayed > 0" class="text-orange-600">
+                  {{ sendingDiagnostics.queue.emailQueue.delayed }} delayed
+                </span>
+                <span v-else-if="sendingDiagnostics.queue.emailQueue.active > 0" class="text-blue-600">
+                  {{ sendingDiagnostics.queue.emailQueue.active }} active
+                </span>
+                <span v-else class="text-green-600">Clear</span>
+              </p>
+            </div>
+            <div>
+              <p class="text-xs text-ink-500 uppercase tracking-wider mb-1">Rate Limit</p>
+              <p class="text-lg font-medium" :class="sendingDiagnostics.warmup[0]?.rateLimit?.canSend ? 'text-green-600' : 'text-red-600'">
+                {{ sendingDiagnostics.warmup[0]?.rateLimit?.currentCount || 0 }}
+                <span class="text-xs text-ink-500">/ {{ sendingDiagnostics.warmup[0]?.rateLimit?.limit || 'N/A' }}</span>
+              </p>
+            </div>
+          </div>
+          
+          <div v-if="sendingDiagnostics && sendingDiagnostics.summary" class="mt-4 pt-4 border-t border-grid-light">
+            <div class="flex items-center space-x-4 text-xs">
+              <div>
+                <span class="text-ink-500">Expected Rate:</span>
+                <span class="font-medium text-ink-900 ml-1">{{ sendingDiagnostics.summary.expectedHourlyRate || 'N/A' }}/hour</span>
+              </div>
+              <div>
+                <span class="text-ink-500">Current Rate:</span>
+                <span class="font-medium text-ink-900 ml-1">{{ sendingDiagnostics.summary.currentHourlyRate || 0 }}/hour</span>
+              </div>
+              <div v-if="sendingDiagnostics.summary.emailsDelayed > 0" class="text-orange-600">
+                ⚠️ {{ sendingDiagnostics.summary.emailsDelayed }} emails delayed (waiting for limit reset)
+              </div>
+              <div v-if="sendingDiagnostics.summary.emailsWaiting > 0" class="text-yellow-600">
+                ⏳ {{ sendingDiagnostics.summary.emailsWaiting }} emails waiting in queue
+              </div>
+            </div>
+          </div>
+        </div>
+        
         <div class="space-y-4">
           <div class="flex items-center justify-between mb-4">
             <div>
@@ -1144,9 +1224,10 @@ async function loadSendingDiagnostics() {
     const response = await api.get('/admin/sending/diagnostics')
     sendingDiagnostics.value = response.data
   } catch (error: any) {
-    console.error('Failed to load sending diagnostics:', error)
-    const errorMessage = error.response?.data?.message || error.message || 'Failed to load diagnostics'
     // Don't alert - just log, diagnostics are nice-to-have
+    console.error('Failed to load sending diagnostics:', error?.response?.data?.message || error?.message || error)
+    // Set to null so UI doesn't try to render invalid data
+    sendingDiagnostics.value = null
   } finally {
     diagnosticsLoading.value = false
   }
