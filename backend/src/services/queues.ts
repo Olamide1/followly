@@ -96,7 +96,7 @@ export async function initializeQueues(): Promise<void> {
       },
     });
     // automationQueue = new Queue('automation', { redis: redisConfig }); // DISABLED: Temporarily commented out
-    schedulingQueue = new Queue('scheduling', { 
+    schedulingQueue = new Queue('scheduling', {  
       redis: redisConfig,
       settings: {
         lockDuration: 30000,
@@ -579,5 +579,41 @@ export async function isEmailQueuePaused(): Promise<boolean> {
     return false;
   }
   return emailQueue.isPaused();
+}
+
+/**
+ * Get job counts for all queues
+ */
+export async function getQueueJobCounts(): Promise<{
+  email: { waiting: number; active: number; completed: number; failed: number; delayed: number };
+  campaignSend: { waiting: number; active: number; completed: number; failed: number; delayed: number };
+  scheduling: { waiting: number; active: number; completed: number; failed: number; delayed: number };
+  contactImport: { waiting: number; active: number; completed: number; failed: number; delayed: number };
+}> {
+  const getCounts = async (queue: Queue.Queue | null) => {
+    if (!queue) {
+      return { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
+    }
+    try {
+      const counts = await queue.getJobCounts();
+      return {
+        waiting: counts.waiting || 0,
+        active: counts.active || 0,
+        completed: counts.completed || 0,
+        failed: counts.failed || 0,
+        delayed: counts.delayed || 0,
+      };
+    } catch (error: any) {
+      console.error('[Queue] Error getting job counts:', error?.message || error);
+      return { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
+    }
+  };
+
+  return {
+    email: await getCounts(emailQueue),
+    campaignSend: await getCounts(campaignSendQueue),
+    scheduling: await getCounts(schedulingQueue),
+    contactImport: await getCounts(contactImportQueue),
+  };
 }
 
