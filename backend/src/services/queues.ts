@@ -149,24 +149,34 @@ function getQueueOptions() {
   const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
   const bclientConfig = getRedisConfigForNewConnection();
   
+  console.log('[Queue Options] Creating queue options with shared Redis connections');
+  console.log('[Queue Options] Redis URL:', redisUrl ? `${redisUrl.substring(0, 20)}...` : 'not set');
+  console.log('[Queue Options] Shared client status:', client?.status || 'unknown');
+  console.log('[Queue Options] Shared subscriber status:', subscriber?.status || 'unknown');
+  
   return {
     createClient: (type: 'client' | 'subscriber' | 'bclient', redisOpts?: any) => {
+      console.log(`[Queue Options] createClient called for type: ${type}`);
       switch (type) {
         case 'client':
           // Shared client for all queues - reduces connections dramatically
+          console.log(`[Queue Options] Returning shared client (status: ${client?.status})`);
           return client;
         case 'subscriber':
           // Shared subscriber for all queues - reduces connections dramatically
+          console.log(`[Queue Options] Returning shared subscriber (status: ${subscriber?.status})`);
           return subscriber;
         case 'bclient':
           // Blocking client - cannot be shared, must create new instance
           // But this is only used temporarily for blocking operations, so minimal impact
           // Use URL string if available, otherwise use config object
+          console.log(`[Queue Options] Creating new bclient (blocking client)`);
           if (redisUrl.startsWith('rediss://') || redisUrl.startsWith('redis://')) {
             return new Redis(redisUrl, { ...bclientConfig, ...redisOpts });
           }
           return new Redis({ ...bclientConfig, ...redisOpts });
         default:
+          console.log(`[Queue Options] Unknown type ${type}, returning shared client`);
           return client;
       }
     },
@@ -243,6 +253,7 @@ export async function initializeQueues(): Promise<void> {
       },
     });
 
+    console.log('[Queue Init] Creating campaign-send queue with shared Redis connections...');
     campaignSendQueue = new Queue('campaign-send', {
       ...queueOptions,
       settings: {
@@ -384,12 +395,25 @@ export async function initializeQueues(): Promise<void> {
     });
 
     // Wait for queues to be ready before processing
-    await Promise.all([
-      emailQueue.isReady(),
-      schedulingQueue.isReady(),
-      campaignSendQueue.isReady(),
-      contactImportQueue.isReady(),
+    console.log('[Queue Init] Waiting for all queues to be ready...');
+    const readyResults = await Promise.all([
+      emailQueue.isReady().then(() => ({ queue: 'email', ready: true })).catch(() => ({ queue: 'email', ready: false })),
+      schedulingQueue.isReady().then(() => ({ queue: 'scheduling', ready: true })).catch(() => ({ queue: 'scheduling', ready: false })),
+      campaignSendQueue.isReady().then(() => ({ queue: 'campaign-send', ready: true })).catch(() => ({ queue: 'campaign-send', ready: false })),
+      contactImportQueue.isReady().then(() => ({ queue: 'contact-import', ready: true })).catch(() => ({ queue: 'contact-import', ready: false })),
     ]);
+    
+    console.log('[Queue Init] Queue ready status:', readyResults);
+    
+    // Verify campaign send queue specifically
+    if (campaignSendQueue) {
+      try {
+        const counts = await campaignSendQueue.getJobCounts();
+        console.log('[Queue Init] Campaign send queue initial counts:', counts);
+      } catch (error: any) {
+        console.error('[Queue Init] Could not get campaign send queue counts:', error?.message || error);
+      }
+    }
 
     console.log('✅ Redis connection ready');
 

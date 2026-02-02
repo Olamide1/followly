@@ -173,6 +173,26 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
         delayed: jobCounts.delayed,
       });
       
+      // Verify job exists in Redis by trying to get it
+      try {
+        const jobData = await campaignSendQueue.getJob(job.id);
+        if (jobData) {
+          console.log(`[Campaign Send Route] ✅ Verified job ${job.id} exists in Redis. State: ${await jobData.getState()}`);
+        } else {
+          console.error(`[Campaign Send Route] ⚠️ WARNING: Job ${job.id} was added but not found in Redis!`);
+        }
+      } catch (verifyError: any) {
+        console.error(`[Campaign Send Route] ⚠️ Could not verify job in Redis:`, verifyError?.message || verifyError);
+      }
+      
+      // Log Redis connection info
+      try {
+        const isReady = await campaignSendQueue.isReady();
+        console.log(`[Campaign Send Route] Queue ready status: ${isReady}`);
+      } catch (readyError: any) {
+        console.error(`[Campaign Send Route] ⚠️ Could not check queue ready status:`, readyError?.message || readyError);
+      }
+      
       // Return immediately - the worker will process the campaign send
       res.json({ 
         success: true,
