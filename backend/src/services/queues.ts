@@ -1,4 +1,5 @@
 import Queue from 'bull';
+import Redis from 'ioredis';
 // Note: Processor functions are imported and registered in workers/index.ts
 // They are NOT imported here to avoid duplicate processor registration
 
@@ -8,26 +9,28 @@ let schedulingQueue: Queue.Queue | null = null;
 let campaignSendQueue: Queue.Queue | null = null;
 let contactImportQueue: Queue.Queue | null = null;
 
-// Shared Redis config object for all Bull queues
-// CRITICAL: All queues use the SAME config object, which allows Bull/ioredis to share connections
-// This reduces Redis connections from ~19 (4 queues × ~4-5 connections each) to ~2-3 total
+// Shared Redis connection instances for all Bull queues
+// CRITICAL: Using shared ioredis instances via createClient reduces connections from ~19 to ~3
 // Heroku Redis has a strict 18 connection limit
-let sharedRedisConfig: any = null;
+// Bull v4 requires separate instances for "client" and "subscriber", but they can be shared across queues
+let sharedRedisClient: Redis | null = null;
+let sharedRedisSubscriber: Redis | null = null;
 
 /**
- * Get shared Redis configuration for all Bull queues
- * Using the same config object allows Bull's underlying ioredis to share connections efficiently
- * This dramatically reduces Redis connection usage (from ~19 to ~2-3 connections)
+ * Create shared Redis connection instances for Bull queues
+ * This is the ONLY way to truly share connections in Bull v4 - using createClient option
+ * Reduces Redis connections from ~19 (4 queues × ~4-5 connections each) to ~3 total
  */
-export function getRedisConfig() {
-  if (sharedRedisConfig) {
-    return sharedRedisConfig;
+function createSharedRedisConnections(): { client: Redis; subscriber: Redis } {
+  if (sharedRedisClient && sharedRedisSubscriber) {
+    return { client: sharedRedisClient, subscriber: sharedRedisSubscriber };
   }
 
   const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
   const isProduction = process.env.NODE_ENV === 'production';
   
-  // If using rediss:// (TLS) or in production, configure TLS
+  let config: any = {};
+  
   if (redisUrl.startsWith('rediss://') || (isProduction && redisUrl.startsWith('redis://'))) {
     // Normalize rediss:// to redis:// for URL parsing, then configure TLS
     const normalizedUrl = redisUrl.replace('rediss://', 'redis://');
@@ -36,7 +39,7 @@ export function getRedisConfig() {
     const host = url.hostname;
     const port = parseInt(url.port || '6379');
     
-    sharedRedisConfig = {
+    config = {
       host,
       port,
       password,
@@ -44,45 +47,135 @@ export function getRedisConfig() {
         rejectUnauthorized: false, // Required for Heroku Redis self-signed certs
       },
       retryStrategy: (times: number) => {
-        // Exponential backoff with max delay
-        // After 10 attempts, stop retrying to prevent infinite loops
         if (times > 10) {
           console.error('[Bull Redis] Max reconnection attempts reached, stopping retry');
-          return null; // Stop retrying
+          return null;
         }
         const delay = Math.min(times * 50, 2000);
         console.log(`[Bull Redis] Reconnecting... attempt ${times} (delay: ${delay}ms)`);
         return delay;
       },
-      enableOfflineQueue: true, // Queue commands while reconnecting
-      // CRITICAL: Connection optimization settings
-      // maxRetriesPerRequest: null allows ioredis to manage retries efficiently
-      maxRetriesPerRequest: null, // Disable automatic retries (Bull handles retries)
-      connectTimeout: 10000, // 10 second connection timeout
-      lazyConnect: false, // Connect immediately - worker needs active connection to process jobs
-      keepAlive: 30000, // Send keepalive every 30 seconds
-      // CRITICAL: Enable connection sharing by using the same config object
-      // ioredis will automatically share connections when queues use the same config
-      enableReadyCheck: false, // Reduce connection overhead
+      enableOfflineQueue: true,
+      maxRetriesPerRequest: null,
+      connectTimeout: 10000,
+      lazyConnect: false,
+      keepAlive: 30000,
+      enableReadyCheck: false,
     };
-    
-    console.log('✅ Shared Redis config created (all queues will share connections)');
   } else {
-    // For local development without TLS
-    sharedRedisConfig = redisUrl;
+    // Local development
+    config = {
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      retryStrategy: (times: number) => {
+        if (times > 10) return null;
+        return Math.min(times * 50, 2000);
+      },
+      enableOfflineQueue: true,
+      maxRetriesPerRequest: null,
+      connectTimeout: 10000,
+      lazyConnect: false,
+      keepAlive: 30000,
+      enableReadyCheck: false,
+    };
+  }
+
+  // Create shared client (for commands) - can be shared across all queues
+  sharedRedisClient = new Redis(config);
+  sharedRedisClient.on('ready', () => {
+    console.log('✅ Shared Redis client ready (shared across all queues)');
+  });
+  sharedRedisClient.on('error', (err) => {
+    console.error('[Bull Redis Client] Error:', err?.message || err);
+  });
+
+  // Create shared subscriber (for pub/sub) - can be shared across all queues
+  sharedRedisSubscriber = new Redis(config);
+  sharedRedisSubscriber.on('ready', () => {
+    console.log('✅ Shared Redis subscriber ready (shared across all queues)');
+  });
+  sharedRedisSubscriber.on('error', (err) => {
+    console.error('[Bull Redis Subscriber] Error:', err?.message || err);
+  });
+
+  console.log('✅ Shared Redis connections created (client + subscriber) - all queues will share these');
+  
+  return { client: sharedRedisClient, subscriber: sharedRedisSubscriber };
+}
+
+/**
+ * Get Redis config for creating new connections (used for bclient)
+ */
+function getRedisConfigForNewConnection(): any {
+  const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  if (redisUrl.startsWith('rediss://') || (isProduction && redisUrl.startsWith('redis://'))) {
+    const normalizedUrl = redisUrl.replace('rediss://', 'redis://');
+    const url = new URL(normalizedUrl);
+    return {
+      host: url.hostname,
+      port: parseInt(url.port || '6379'),
+      password: url.password || undefined,
+      tls: { rejectUnauthorized: false },
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    };
   }
   
-  return sharedRedisConfig;
+  return {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379'),
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+  };
+}
+
+/**
+ * Get Bull queue options with shared Redis connections
+ * Uses createClient to force Bull to reuse the same ioredis instances
+ * This reduces connections from ~19 to ~3 (1 client + 1 subscriber + occasional bclient)
+ */
+function getQueueOptions() {
+  const { client, subscriber } = createSharedRedisConnections();
+  const bclientConfig = getRedisConfigForNewConnection();
+  
+  return {
+    createClient: (type: 'client' | 'subscriber' | 'bclient', redisOpts?: any) => {
+      switch (type) {
+        case 'client':
+          // Shared client for all queues - reduces connections dramatically
+          return client;
+        case 'subscriber':
+          // Shared subscriber for all queues - reduces connections dramatically
+          return subscriber;
+        case 'bclient':
+          // Blocking client - cannot be shared, must create new instance
+          // But this is only used temporarily for blocking operations, so minimal impact
+          return new Redis({ ...bclientConfig, ...redisOpts });
+        default:
+          return client;
+      }
+    },
+  };
+}
+
+// Legacy function for backward compatibility
+export function getRedisConfig() {
+  // Return the shared client for any code that still uses this
+  const { client } = createSharedRedisConnections();
+  return client;
 }
 
 export async function initializeQueues(): Promise<void> {
   try {
-    const redisConfig = getRedisConfig();
+    // Get shared queue options with connection sharing
+    const queueOptions = getQueueOptions();
 
-    // Create queues with optimized connection settings and cleanup policies
-    // Bull will share connections more efficiently when using the same config
+    // Create queues with shared Redis connections via createClient
+    // This reduces connections from ~19 to ~3 (1 client + 1 subscriber + occasional bclient)
     emailQueue = new Queue('email', { 
-      redis: redisConfig,
+      ...queueOptions,
       // Optimize connection usage
       settings: {
         // Reduce connection overhead by using fewer connections per queue
@@ -110,9 +203,9 @@ export async function initializeQueues(): Promise<void> {
         },
       },
     });
-    // automationQueue = new Queue('automation', { redis: redisConfig }); // DISABLED: Temporarily commented out
+    // automationQueue = new Queue('automation', queueOptions); // DISABLED: Temporarily commented out
     schedulingQueue = new Queue('scheduling', {  
-      redis: redisConfig,
+      ...queueOptions,
       settings: {
         lockDuration: 30000,
         lockRenewTime: 25000, // Renew lock every 25 seconds (reduces overhead)
@@ -138,7 +231,7 @@ export async function initializeQueues(): Promise<void> {
     });
 
     campaignSendQueue = new Queue('campaign-send', {
-      redis: redisConfig,
+      ...queueOptions,
       settings: {
         lockDuration: 300000, // 5 minutes - campaign sends can take longer
         lockRenewTime: 60000, // Renew lock every minute
@@ -163,7 +256,7 @@ export async function initializeQueues(): Promise<void> {
     });
 
     contactImportQueue = new Queue('contact-import', {
-      redis: redisConfig,
+      ...queueOptions,
       settings: {
         lockDuration: 600000, // 10 minutes - contact imports can take a while
         lockRenewTime: 120000, // Renew lock every 2 minutes
