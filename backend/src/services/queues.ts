@@ -26,103 +26,111 @@ function createSharedRedisConnections(): { client: Redis; subscriber: Redis } {
     return { client: sharedRedisClient, subscriber: sharedRedisSubscriber };
   }
 
+  // Use REDIS_URL directly - ioredis can parse it properly
+  // Heroku automatically sets REDIS_URL with the full connection string
   const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
-  const isProduction = process.env.NODE_ENV === 'production';
   
-  let config: any = {};
-  
-  if (redisUrl.startsWith('rediss://') || (isProduction && redisUrl.startsWith('redis://'))) {
-    // Normalize rediss:// to redis:// for URL parsing, then configure TLS
-    const normalizedUrl = redisUrl.replace('rediss://', 'redis://');
-    const url = new URL(normalizedUrl);
-    const password = url.password || undefined;
-    const host = url.hostname;
-    const port = parseInt(url.port || '6379');
-    
-    config = {
-      host,
-      port,
-      password,
-      tls: {
-        rejectUnauthorized: false, // Required for Heroku Redis self-signed certs
-      },
-      retryStrategy: (times: number) => {
-        if (times > 10) {
-          console.error('[Bull Redis] Max reconnection attempts reached, stopping retry');
-          return null;
-        }
-        const delay = Math.min(times * 50, 2000);
-        console.log(`[Bull Redis] Reconnecting... attempt ${times} (delay: ${delay}ms)`);
-        return delay;
-      },
-      enableOfflineQueue: true,
-      maxRetriesPerRequest: null,
-      connectTimeout: 10000,
-      lazyConnect: false,
-      keepAlive: 30000,
-      enableReadyCheck: false,
-    };
-  } else {
-    // Local development
-    config = {
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      retryStrategy: (times: number) => {
-        if (times > 10) return null;
-        return Math.min(times * 50, 2000);
-      },
-      enableOfflineQueue: true,
-      maxRetriesPerRequest: null,
-      connectTimeout: 10000,
-      lazyConnect: false,
-      keepAlive: 30000,
-      enableReadyCheck: false,
-    };
+  // Validate REDIS_URL is present
+  if (!process.env.REDIS_URL && !process.env.REDIS_HOST) {
+    console.error('[Bull Redis] ERROR: No REDIS_URL or REDIS_HOST found in environment variables');
+    throw new Error('Redis configuration missing: REDIS_URL or REDIS_HOST must be set');
   }
+  
+  // ioredis can accept a URL string directly - this is the safest approach
+  // It handles TLS, passwords, and all connection details automatically
+  const config: any = {
+    // Pass the full URL string - ioredis will parse it correctly
+    // This works for both rediss:// (TLS) and redis:// URLs
+    ...(redisUrl.startsWith('rediss://') || redisUrl.startsWith('redis://') 
+      ? { 
+          // For URL strings, ioredis handles parsing automatically
+          // But we need to ensure TLS settings for Heroku Redis
+          ...(redisUrl.startsWith('rediss://') ? {
+            tls: {
+              rejectUnauthorized: false, // Required for Heroku Redis self-signed certs
+            }
+          } : {}),
+        }
+      : {
+          // Fallback for non-URL format (host/port only)
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379'),
+        }
+    ),
+    retryStrategy: (times: number) => {
+      if (times > 10) {
+        console.error('[Bull Redis] Max reconnection attempts reached, stopping retry');
+        return null;
+      }
+      const delay = Math.min(times * 50, 2000);
+      console.log(`[Bull Redis] Reconnecting... attempt ${times} (delay: ${delay}ms)`);
+      return delay;
+    },
+    enableOfflineQueue: true,
+    maxRetriesPerRequest: null,
+    connectTimeout: 10000,
+    lazyConnect: false,
+    keepAlive: 30000,
+    enableReadyCheck: false,
+  };
 
   // Create shared client (for commands) - can be shared across all queues
-  sharedRedisClient = new Redis(config);
+  // ioredis accepts URL string as first argument, or config object
+  sharedRedisClient = redisUrl.startsWith('rediss://') || redisUrl.startsWith('redis://')
+    ? new Redis(redisUrl, config) // Pass URL string + config for TLS settings
+    : new Redis(config); // Use config object for host/port format
+  
   sharedRedisClient.on('ready', () => {
     console.log('✅ Shared Redis client ready (shared across all queues)');
   });
   sharedRedisClient.on('error', (err) => {
     console.error('[Bull Redis Client] Error:', err?.message || err);
   });
+  sharedRedisClient.on('connect', () => {
+    console.log('[Bull Redis Client] Connecting...');
+  });
 
   // Create shared subscriber (for pub/sub) - can be shared across all queues
-  sharedRedisSubscriber = new Redis(config);
+  sharedRedisSubscriber = redisUrl.startsWith('rediss://') || redisUrl.startsWith('redis://')
+    ? new Redis(redisUrl, config) // Pass URL string + config for TLS settings
+    : new Redis(config); // Use config object for host/port format
+  
   sharedRedisSubscriber.on('ready', () => {
     console.log('✅ Shared Redis subscriber ready (shared across all queues)');
   });
   sharedRedisSubscriber.on('error', (err) => {
     console.error('[Bull Redis Subscriber] Error:', err?.message || err);
   });
+  sharedRedisSubscriber.on('connect', () => {
+    console.log('[Bull Redis Subscriber] Connecting...');
+  });
 
-  console.log('✅ Shared Redis connections created (client + subscriber) - all queues will share these');
+  console.log(`✅ Shared Redis connections created using REDIS_URL (all queues will share these)`);
   
   return { client: sharedRedisClient, subscriber: sharedRedisSubscriber };
 }
 
 /**
  * Get Redis config for creating new connections (used for bclient)
+ * Returns config that can be passed to new Redis() constructor
  */
 function getRedisConfigForNewConnection(): any {
   const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
-  const isProduction = process.env.NODE_ENV === 'production';
   
-  if (redisUrl.startsWith('rediss://') || (isProduction && redisUrl.startsWith('redis://'))) {
-    const normalizedUrl = redisUrl.replace('rediss://', 'redis://');
-    const url = new URL(normalizedUrl);
+  // If we have a URL string, return it with TLS config
+  if (redisUrl.startsWith('rediss://') || redisUrl.startsWith('redis://')) {
     return {
-      host: url.hostname,
-      port: parseInt(url.port || '6379'),
-      password: url.password || undefined,
-      tls: { rejectUnauthorized: false },
+      // ioredis will parse the URL string automatically
+      // We just need to add TLS config for rediss://
+      ...(redisUrl.startsWith('rediss://') ? {
+        tls: { rejectUnauthorized: false },
+      } : {}),
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
     };
   }
   
+  // Fallback for host/port format
   return {
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379'),
@@ -138,6 +146,7 @@ function getRedisConfigForNewConnection(): any {
  */
 function getQueueOptions() {
   const { client, subscriber } = createSharedRedisConnections();
+  const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
   const bclientConfig = getRedisConfigForNewConnection();
   
   return {
@@ -152,6 +161,10 @@ function getQueueOptions() {
         case 'bclient':
           // Blocking client - cannot be shared, must create new instance
           // But this is only used temporarily for blocking operations, so minimal impact
+          // Use URL string if available, otherwise use config object
+          if (redisUrl.startsWith('rediss://') || redisUrl.startsWith('redis://')) {
+            return new Redis(redisUrl, { ...bclientConfig, ...redisOpts });
+          }
           return new Redis({ ...bclientConfig, ...redisOpts });
         default:
           return client;
