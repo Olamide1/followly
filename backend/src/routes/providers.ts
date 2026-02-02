@@ -2,6 +2,9 @@ import { Router, Response, NextFunction } from 'express';
 import { pool } from '../database/connection';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { createError } from '../middleware/errorHandler';
+import { DomainReputationService } from '../services/domainReputation';
+import { RateLimiterService } from '../services/rateLimiter';
+import { WarmupService } from '../services/warmup';
 
 const router = Router();
 router.use(authenticateToken);
@@ -435,6 +438,191 @@ router.get('/test-nodemailer', async (req: AuthRequest, res: Response, next: Nex
         has_all_required: !!(config.smtp_host && config.smtp_port && config.smtp_user && config.smtp_pass),
       }
     });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Get domain reputation and rate limit status for all domains
+router.get('/domains/status', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    if (!userId || userId <= 0) {
+      throw createError('Invalid user ID', 400);
+    }
+    const reputationService = new DomainReputationService();
+    const rateLimiterService = new RateLimiterService();
+    const warmupService = new WarmupService();
+
+    // Get all unique domains from provider configs
+    const domainsResult = await pool.query(
+      `SELECT DISTINCT from_email FROM provider_configs 
+       WHERE user_id = $1 AND is_active = true AND from_email IS NOT NULL`,
+      [userId]
+    );
+
+    const domains = domainsResult.rows.map((row: any) => {
+      const email = row.from_email;
+      return email.split('@')[1]; // Extract domain
+    });
+
+    const statuses = await Promise.all(
+      domains.map(async (domain: string) => {
+        // Get reputation
+        const reputation = await reputationService.getReputation(userId, domain) ||
+          await reputationService.getOrCreateReputation(userId, domain);
+
+        // Get rate limit status (with dynamic limits based on reputation/warmup)
+        // Get provider for this domain to calculate accurate limits
+        const domainProviders = await pool.query(
+          `SELECT DISTINCT provider FROM provider_configs 
+           WHERE user_id = $1 AND from_email LIKE $2 AND is_active = true LIMIT 1`,
+          [userId, `%@${domain}`]
+        );
+        const primaryProvider = domainProviders.rows[0]?.provider || 'nodemailer';
+        const rateLimitStatus = await rateLimiterService.getStatus(domain, userId, primaryProvider);
+
+        // Get warmup status for each provider
+        const providers = await pool.query(
+          `SELECT DISTINCT provider FROM provider_configs 
+           WHERE user_id = $1 AND from_email LIKE $2 AND is_active = true`,
+          [userId, `%@${domain}`]
+        );
+
+        const warmupStatuses = await Promise.all(
+          providers.rows.map(async (p: any) => {
+            const schedule = await warmupService.getWarmupSchedule(userId, domain, p.provider);
+            const dailyLimit = schedule ? await warmupService.getDailyLimit(userId, domain, p.provider) : null;
+            return {
+              provider: p.provider,
+              inWarmup: !!schedule,
+              phase: schedule?.phase || null,
+              dailyLimit: dailyLimit,
+              currentCount: schedule?.current_count || 0,
+            };
+          })
+        );
+
+        return {
+          domain,
+          reputation: {
+            score: reputation.reputationScore,
+            status: reputation.status,
+            bounceRate: reputation.bounceRate,
+            complaintRate: reputation.complaintRate,
+            engagementRate: reputation.engagementRate,
+            totalSent: reputation.totalSent,
+            pausedReason: reputation.pausedReason,
+          },
+          rateLimit: {
+            currentCount: rateLimitStatus.currentCount,
+            limit: rateLimitStatus.limit,
+            percentageUsed: rateLimitStatus.percentageUsed,
+            timeUntilReset: rateLimitStatus.timeUntilReset,
+          },
+          warmup: warmupStatuses,
+        };
+      })
+    );
+
+    res.json({ domains: statuses });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Get reputation and rate limit for a specific domain
+router.get('/domains/:domain/status', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    if (!userId || userId <= 0) {
+      throw createError('Invalid user ID', 400);
+    }
+    
+    const domain = decodeURIComponent(req.params.domain);
+    if (!domain || domain.trim().length === 0) {
+      throw createError('Invalid domain parameter', 400);
+    }
+    const reputationService = new DomainReputationService();
+    const rateLimiterService = new RateLimiterService();
+    const warmupService = new WarmupService();
+
+    // Calculate/refresh reputation
+    await reputationService.calculateReputation(userId, domain);
+    const reputation = await reputationService.getReputation(userId, domain) ||
+      await reputationService.getOrCreateReputation(userId, domain);
+
+    // Get rate limit status (with dynamic limits)
+    const domainProviders = await pool.query(
+      `SELECT DISTINCT provider FROM provider_configs 
+       WHERE user_id = $1 AND from_email LIKE $2 AND is_active = true LIMIT 1`,
+      [userId, `%@${domain}`]
+    );
+    const primaryProvider = domainProviders.rows[0]?.provider || 'nodemailer';
+    const rateLimitStatus = await rateLimiterService.getStatus(domain, userId, primaryProvider);
+
+    // Get warmup status for each provider
+    const providers = await pool.query(
+      `SELECT DISTINCT provider FROM provider_configs 
+       WHERE user_id = $1 AND from_email LIKE $2 AND is_active = true`,
+      [userId, `%@${domain}`]
+    );
+
+    const warmupStatuses = await Promise.all(
+      providers.rows.map(async (p: any) => {
+        const schedule = await warmupService.getWarmupSchedule(userId, domain, p.provider);
+        const dailyLimit = schedule ? await warmupService.getDailyLimit(userId, domain, p.provider) : null;
+        return {
+          provider: p.provider,
+          inWarmup: !!schedule,
+          phase: schedule?.phase || null,
+          dailyLimit: dailyLimit,
+          currentCount: schedule?.current_count || 0,
+        };
+      })
+    );
+
+    res.json({
+      domain,
+      reputation: {
+        score: reputation.reputationScore,
+        status: reputation.status,
+        bounceRate: reputation.bounceRate,
+        complaintRate: reputation.complaintRate,
+        engagementRate: reputation.engagementRate,
+        totalSent: reputation.totalSent,
+        pausedReason: reputation.pausedReason,
+      },
+      rateLimit: {
+        currentCount: rateLimitStatus.currentCount,
+        limit: rateLimitStatus.limit,
+        percentageUsed: rateLimitStatus.percentageUsed,
+        timeUntilReset: rateLimitStatus.timeUntilReset,
+      },
+      warmup: warmupStatuses,
+    });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Manually resume sending for a paused domain
+router.post('/domains/:domain/resume', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    if (!userId || userId <= 0) {
+      throw createError('Invalid user ID', 400);
+    }
+    
+    const domain = decodeURIComponent(req.params.domain);
+    if (!domain || domain.trim().length === 0) {
+      throw createError('Invalid domain parameter', 400);
+    }
+    const reputationService = new DomainReputationService();
+
+    await reputationService.resumeSending(userId, domain);
+
+    res.json({ success: true, message: 'Domain sending resumed. Monitor reputation closely.' });
   } catch (error: any) {
     next(error);
   }

@@ -241,6 +241,10 @@ export async function initializeQueues(): Promise<void> {
     // This runs every 10 minutes to find and recover emails stuck in "sending" state
     startStuckEmailRecovery();
 
+    // Start periodic reputation calculation
+    // This runs every hour to update domain reputation scores and auto-pause if needed
+    startReputationCalculation();
+
     // Note: Processors are NOT registered here to avoid duplicate registration
     // The worker dyno (workers/index.ts) is responsible for registering processors
     // This ensures jobs are only processed once, avoiding race conditions
@@ -464,6 +468,48 @@ function startStuckEmailRecovery(): void {
   setInterval(recoverStuckEmails, RECOVERY_INTERVAL);
   
   console.log('✅ Stuck email recovery scheduled (runs every 10 minutes)');
+}
+
+/**
+ * Periodic reputation calculation for all domains
+ * Runs every hour to update reputation scores and auto-pause if needed
+ */
+function startReputationCalculation(): void {
+  const REPUTATION_INTERVAL = 60 * 60 * 1000; // 1 hour
+  
+  const calculateReputations = async () => {
+    try {
+      const { DomainReputationService } = await import('./domainReputation');
+      const reputationService = new DomainReputationService();
+      const { pool } = await import('../database/connection');
+      
+      // Get all unique user_id and domain combinations
+      const domainsResult = await pool.query(
+        `SELECT DISTINCT user_id, 
+         SUBSTRING(from_email FROM '@(.*)$') as domain
+         FROM provider_configs 
+         WHERE is_active = true AND from_email IS NOT NULL`
+      );
+      
+      for (const row of domainsResult.rows) {
+        try {
+          await reputationService.calculateReputation(row.user_id, row.domain);
+        } catch (error: any) {
+          console.error(`[Reputation] Failed to calculate reputation for domain ${row.domain}:`, error?.message || error);
+        }
+      }
+      
+      console.log(`[Reputation] Calculated reputation for ${domainsResult.rows.length} domains`);
+    } catch (error: any) {
+      console.error('[Reputation] Error during reputation calculation:', error?.message || error);
+    }
+  };
+  
+  // Run immediately, then every hour
+  calculateReputations();
+  setInterval(calculateReputations, REPUTATION_INTERVAL);
+  
+  console.log('✅ Reputation calculation scheduled (runs every hour)');
 }
 
 export function getEmailQueue() {

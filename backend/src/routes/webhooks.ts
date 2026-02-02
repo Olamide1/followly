@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../database/connection';
+import { DomainReputationService } from '../services/domainReputation';
 import { recordOpenEvent, recordClickEvent } from '../services/tracking';
 
 const router = Router();

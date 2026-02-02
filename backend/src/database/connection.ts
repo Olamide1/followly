@@ -76,6 +76,7 @@ async function runMigrations(): Promise<void> {
       createSuppressionListTable,
       createProviderConfigsTable,
       createWarmupSchedulesTable,
+      createDomainReputationTable,
       createCustomFieldsTable,
       createTagsTable,
       createContactTagsTable,
@@ -463,6 +464,41 @@ async function createWarmupSchedulesTable(client: PoolClient): Promise<void> {
   
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_warmup_schedules_user_id ON warmup_schedules(user_id)
+  `);
+}
+
+async function createDomainReputationTable(client: PoolClient): Promise<void> {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS domain_reputation (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      domain VARCHAR(255) NOT NULL,
+      reputation_score INTEGER DEFAULT 100 CHECK (reputation_score >= 0 AND reputation_score <= 100),
+      status VARCHAR(50) DEFAULT 'active' CHECK (status IN ('active', 'paused', 'warning')),
+      bounce_rate DECIMAL(5,4) DEFAULT 0,
+      complaint_rate DECIMAL(5,4) DEFAULT 0,
+      engagement_rate DECIMAL(5,4) DEFAULT 0,
+      total_sent INTEGER DEFAULT 0,
+      total_bounced INTEGER DEFAULT 0,
+      total_complained INTEGER DEFAULT 0,
+      total_opened INTEGER DEFAULT 0,
+      total_clicked INTEGER DEFAULT 0,
+      last_calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      paused_at TIMESTAMP,
+      paused_reason TEXT,
+      google_postmaster_data JSONB DEFAULT '{}',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, domain)
+    )
+  `);
+  
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_domain_reputation_user_id ON domain_reputation(user_id)
+  `);
+  
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_domain_reputation_domain ON domain_reputation(domain)
   `);
 }
 

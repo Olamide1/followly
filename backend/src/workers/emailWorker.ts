@@ -4,6 +4,7 @@ import { RoutingService } from '../services/routing';
 import { EmailProviderService, ProviderConfig, ProviderType } from '../services/providers';
 import { WarmupService } from '../services/warmup';
 import { RateLimiterService } from '../services/rateLimiter';
+import { DomainReputationService } from '../services/domainReputation';
 import {
   generateTrackingToken,
   storeTrackingToken,
@@ -15,6 +16,7 @@ import {
 let routingService: RoutingService | null = null;
 let warmupService: WarmupService | null = null;
 let rateLimiterService: RateLimiterService | null = null;
+let domainReputationService: DomainReputationService | null = null;
 
 // Cache provider services per user (to avoid reloading on every email)
 const userProviderServices: Map<number, EmailProviderService> = new Map();
@@ -228,6 +230,9 @@ export async function processEmailQueue(job: Job) {
     if (!rateLimiterService) {
       rateLimiterService = new RateLimiterService();
     }
+    if (!domainReputationService) {
+      domainReputationService = new DomainReputationService();
+    }
 
     // Load user's providers from database
     const providerService = await loadUserProviders(userId);
@@ -303,6 +308,23 @@ export async function processEmailQueue(job: Job) {
     
     routingDecision = await userRoutingService.selectProvider(userId, campaignType);
 
+    // Automatically create warmup schedule for new domains (automatic warmup)
+    await warmupService.ensureWarmupSchedule(userId, domain, routingDecision.provider);
+
+    // Check domain reputation (auto-pause if reputation is poor)
+    const reputationCheck = await domainReputationService!.canSend(userId, domain);
+    if (!reputationCheck.canSend) {
+      console.warn(`[Reputation] Domain ${domain} is paused: ${reputationCheck.reason}`);
+      // Mark email as failed due to reputation
+      if (finalEmailQueueId) {
+        await pool.query(
+          `UPDATE email_queue SET status = 'failed', error_message = $1 WHERE id = $2`,
+          [`Domain reputation paused: ${reputationCheck.reason}`, finalEmailQueueId]
+        );
+      }
+      throw new Error(`Domain reputation paused: ${reputationCheck.reason}`);
+    }
+
     // Check warmup limits with the actual provider
     const canSendWarmup = await warmupService.canSend(userId, domain, routingDecision.provider);
 
@@ -313,9 +335,12 @@ export async function processEmailQueue(job: Job) {
     }
 
     // Check rate limit for domain (prevents hitting SMTP provider limits)
-    // Only check for Nodemailer/SMTP providers (they have strict hourly limits)
-    if (routingDecision.provider === 'nodemailer' && rateLimiterService) {
-      const rateLimitCheck = await rateLimiterService.canSend(domain);
+    // Dynamic limits based on reputation and warmup status (visible to users)
+    if (rateLimiterService) {
+      const rateLimitCheck = await rateLimiterService.canSend(domain, {
+        userId,
+        provider: routingDecision.provider,
+      });
       
       if (!rateLimitCheck.canSend) {
         // At rate limit - delay until next hour
@@ -501,9 +526,12 @@ export async function processEmailQueue(job: Job) {
     // Record warmup send
     await warmupService.recordSend(userId, domain, routingDecision.provider);
 
-    // Record rate limit send (for Nodemailer/SMTP providers)
-    if (routingDecision.provider === 'nodemailer' && rateLimiterService) {
-      await rateLimiterService.recordSend(domain);
+    // Record rate limit send (for all providers - tracks dynamic limits)
+    if (rateLimiterService) {
+      await rateLimiterService.recordSend(domain, {
+        userId,
+        provider: routingDecision.provider,
+      });
     }
 
     return result;
