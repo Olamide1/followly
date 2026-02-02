@@ -12,6 +12,7 @@ import {
   addTrackingPixel,
   wrapLinksWithTracking,
 } from '../services/tracking';
+import { getEmailQueue } from '../services/queues';
 
 let routingService: RoutingService | null = null;
 let warmupService: WarmupService | null = null;
@@ -20,6 +21,52 @@ let domainReputationService: DomainReputationService | null = null;
 
 // Cache provider services per user (to avoid reloading on every email)
 const userProviderServices: Map<number, EmailProviderService> = new Map();
+
+/**
+ * Safely delay a job, handling "Missing lock" errors by re-adding to queue
+ * This prevents jobs from failing when the lock expires during processing
+ */
+async function safelyDelayJob(job: Job, delayMs: number, reason: string): Promise<void> {
+  try {
+    // Try to move job to delayed state
+    await job.moveToDelayed(Date.now() + delayMs);
+    console.log(`[Email Worker] Job ${job.id} delayed: ${reason} (${Math.round(delayMs / 60000)} minutes)`);
+  } catch (error: any) {
+    // If "Missing lock" error, re-add job to queue with delay
+    if (error.message?.includes('Missing lock') || error.message?.includes('delayed')) {
+      console.warn(`[Email Worker] Job ${job.id} lock expired, re-adding to queue with delay: ${reason}`);
+      
+      try {
+        const emailQueue = getEmailQueue();
+        // Re-add job with same data and delay
+        await emailQueue.add(job.data, {
+          delay: delayMs,
+          jobId: `retry-${job.id}-${Date.now()}`, // Unique ID to prevent conflicts
+          attempts: job.opts.attempts || 3,
+          removeOnComplete: job.opts.removeOnComplete || { age: 1800, count: 50 },
+          removeOnFail: job.opts.removeOnFail || { age: 86400, count: 500 },
+        });
+        
+        // Remove the original job to prevent duplicates
+        try {
+          await job.remove();
+        } catch (removeError: any) {
+          // Ignore errors removing the job - it may already be removed
+          console.warn(`[Email Worker] Could not remove original job ${job.id}:`, removeError?.message);
+        }
+        
+        console.log(`[Email Worker] Job ${job.id} re-added to queue with ${Math.round(delayMs / 60000)} minute delay`);
+      } catch (requeueError: any) {
+        console.error(`[Email Worker] Failed to re-add job ${job.id} to queue:`, requeueError?.message || requeueError);
+        // If re-queuing fails, throw the original error so job can be retried normally
+        throw error;
+      }
+    } else {
+      // Other errors should be thrown
+      throw error;
+    }
+  }
+}
 
 /**
  * Load and initialize providers for a specific user from the database
@@ -329,8 +376,8 @@ export async function processEmailQueue(job: Job) {
     const canSendWarmup = await warmupService.canSend(userId, domain, routingDecision.provider);
 
     if (!canSendWarmup) {
-      // Reschedule for later
-      await job.moveToDelayed(Date.now() + 3600000); // 1 hour later
+      // Reschedule for later - use safe delay function
+      await safelyDelayJob(job, 3600000, 'Warmup limit reached');
       return;
     }
 
@@ -364,7 +411,8 @@ export async function processEmailQueue(job: Job) {
           );
         }
         
-        await job.moveToDelayed(Date.now() + delayMs);
+        // Use safe delay function to handle lock expiration
+        await safelyDelayJob(job, delayMs, `Rate limit reached: ${rateLimitCheck.currentCount}/${rateLimitCheck.limit} emails/hour`);
         return;
       }
     }
@@ -591,8 +639,8 @@ export async function processEmailQueue(job: Job) {
         );
       }
 
-      // Delay the job
-      await job.moveToDelayed(Date.now() + delayMs);
+      // Delay the job using safe delay function
+      await safelyDelayJob(job, delayMs, `Rate limit exceeded for domain ${domain}`);
       console.warn(
         `[RateLimiter] Rate limit error for domain ${domain}. Delaying email for ${Math.round(delayMs / 60000)} minutes.`
       );

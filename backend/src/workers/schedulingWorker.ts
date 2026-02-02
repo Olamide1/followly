@@ -1,5 +1,40 @@
 import { Job } from 'bull';
 import { pool } from '../database/connection';
+import { getSchedulingQueue } from '../services/queues';
+
+/**
+ * Safely delay a scheduling job, handling "Missing lock" errors by re-adding to queue
+ */
+async function safelyDelaySchedulingJob(job: Job, targetTimestamp: number): Promise<void> {
+  try {
+    await job.moveToDelayed(targetTimestamp);
+  } catch (error: any) {
+    if (error.message?.includes('Missing lock') || error.message?.includes('delayed')) {
+      console.warn(`[Scheduling Worker] Job ${job.id} lock expired, re-adding to queue with delay`);
+      try {
+        const schedulingQueue = getSchedulingQueue();
+        const delayMs = Math.max(0, targetTimestamp - Date.now());
+        await schedulingQueue.add(job.data, {
+          delay: delayMs,
+          jobId: `retry-${job.id}-${Date.now()}`,
+          attempts: job.opts.attempts || 3,
+          removeOnComplete: job.opts.removeOnComplete || true,
+          removeOnFail: job.opts.removeOnFail || false,
+        });
+        try {
+          await job.remove();
+        } catch (removeError: any) {
+          // Ignore errors removing the job
+        }
+      } catch (requeueError: any) {
+        console.error(`[Scheduling Worker] Failed to re-add job ${job.id}:`, requeueError?.message);
+        throw error;
+      }
+    } else {
+      throw error;
+    }
+  }
+}
 
 export async function processSchedulingQueue(job: Job) {
   const { campaignId } = job.data;
@@ -44,9 +79,9 @@ export async function processSchedulingQueue(job: Job) {
       // But log a warning
       console.warn(`Campaign ${campaignId} scheduled time has passed (${scheduledAt.toISOString()}), sending now`);
     } else {
-      // Not time yet, reschedule - moveToDelayed expects a timestamp, not a delay
+      // Not time yet, reschedule - use safe delay function
       const targetTimestamp = scheduledTime;
-      await job.moveToDelayed(targetTimestamp);
+      await safelyDelaySchedulingJob(job, targetTimestamp);
       return;
     }
 
