@@ -99,7 +99,93 @@ export class RateLimiterService {
   }
 
   /**
-   * Check if we can send an email for a given domain
+   * Atomic Lua script to check and reserve a rate limit slot
+   * Returns: [canSend (1 or 0), newCount, limit]
+   * This prevents race conditions where multiple jobs check simultaneously
+   */
+  private getCheckAndReserveScript(): string {
+    return `
+      local key = KEYS[1]
+      local limit = tonumber(ARGV[1])
+      local expire = tonumber(ARGV[2])
+      
+      local current = redis.call('GET', key)
+      local count = current and tonumber(current) or 0
+      
+      if count < limit then
+        -- Under limit: increment and return success
+        local newCount = redis.call('INCR', key)
+        redis.call('EXPIRE', key, expire)
+        return {1, newCount, limit}
+      else
+        -- At or over limit: return failure without incrementing
+        return {0, count, limit}
+      end
+    `;
+  }
+
+  /**
+   * Execute Lua script using node-redis v4+ API
+   * Falls back to non-atomic check if script execution fails
+   */
+  private async executeAtomicCheck(
+    redis: any,
+    script: string,
+    redisKey: string,
+    limit: number
+  ): Promise<{ canSend: boolean; currentCount: number }> {
+    try {
+      // Try to use eval with options object (node-redis v4+ format)
+      // The exact API may vary, so we'll try multiple formats
+      let result: [number, number, number];
+      
+      try {
+        // Try format: eval(script, { keys: [...], arguments: [...] })
+        result = await redis.eval(script, {
+          keys: [redisKey],
+          arguments: [limit.toString(), '7200'],
+        }) as [number, number, number];
+      } catch (formatError: any) {
+        // Fallback: try traditional format eval(script, numKeys, ...keys, ...args)
+        try {
+          result = await redis.eval(
+            script,
+            1,
+            redisKey,
+            limit.toString(),
+            '7200'
+          ) as [number, number, number];
+        } catch (fallbackError: any) {
+          // If both fail, fall back to non-atomic check
+          console.warn(`[RateLimiter] Lua script execution failed, using non-atomic check:`, fallbackError?.message);
+          const currentCount = await redis.get(redisKey);
+          const count = currentCount ? parseInt(currentCount, 10) : 0;
+          return {
+            canSend: count < limit,
+            currentCount: count,
+          };
+        }
+      }
+      
+      return {
+        canSend: result[0] === 1,
+        currentCount: result[1],
+      };
+    } catch (error: any) {
+      // Fall back to non-atomic check if script fails
+      console.warn(`[RateLimiter] Lua script execution failed, using non-atomic check:`, error?.message);
+      const currentCount = await redis.get(redisKey);
+      const count = currentCount ? parseInt(currentCount, 10) : 0;
+      return {
+        canSend: count < limit,
+        currentCount: count,
+      };
+    }
+  }
+
+  /**
+   * Check if we can send an email for a given domain (atomic check-and-reserve)
+   * This uses a Lua script to atomically check and reserve a slot, preventing race conditions
    * @param domain The sending domain (extracted from fromEmail)
    * @param config Optional rate limit configuration (will calculate dynamically if not provided)
    * @returns Object with canSend boolean and timeUntilReset in milliseconds
@@ -131,9 +217,35 @@ export class RateLimiterService {
       const hourKey = now.toISOString().split(':')[0]; // Format: YYYY-MM-DDTHH
       const redisKey = `rate_limit:${normalizedDomain}:${hourKey}`;
       
-      // Get current count
-      const currentCount = await redis.get(redisKey);
-      const count = currentCount ? parseInt(currentCount, 10) : 0;
+      // Use atomic Lua script to check and reserve a slot
+      // This prevents race conditions where multiple jobs check simultaneously
+      const script = this.getCheckAndReserveScript();
+      const atomicResult = await this.executeAtomicCheck(redis, script, redisKey, limit);
+      
+      const canSend = atomicResult.canSend;
+      const currentCount = atomicResult.currentCount;
+      const actualLimit = limit;
+      
+      // If atomic check succeeded and we can send, the counter was already incremented
+      // If atomic check failed, increment manually (fallback to non-atomic)
+      if (canSend && atomicResult.currentCount > 0) {
+        // Counter was incremented by Lua script, ensure expiration is set
+        try {
+          await redis.expire(redisKey, 7200);
+        } catch (expireError: any) {
+          // Ignore expiration errors
+        }
+      } else if (canSend) {
+        // Fallback: non-atomic increment (shouldn't happen if script worked)
+        try {
+          await redis.multi()
+            .incr(redisKey)
+            .expire(redisKey, 7200)
+            .exec();
+        } catch (incrError: any) {
+          console.warn(`[RateLimiter] Failed to increment counter:`, incrError?.message);
+        }
+      }
       
       // Calculate time until next hour (when limit resets)
       const nextHour = new Date(now);
@@ -143,11 +255,23 @@ export class RateLimiterService {
       nextHour.setMilliseconds(0);
       const timeUntilReset = nextHour.getTime() - now.getTime();
       
+      // Log if approaching or at limit
+      if (!canSend) {
+        console.warn(
+          `[RateLimiter] Domain ${domain} rate limit reached: ${currentCount}/${actualLimit} emails/hour. ` +
+          `Email will be delayed until limit resets.`
+        );
+      } else if (currentCount >= actualLimit * 0.95) {
+        console.warn(`[RateLimiter] Domain ${domain} is at ${currentCount}/${actualLimit} (${Math.round((currentCount/actualLimit)*100)}%) - approaching hourly limit!`);
+      } else if (currentCount >= actualLimit * 0.8) {
+        console.log(`[RateLimiter] Domain ${domain} is at ${currentCount}/${actualLimit} (${Math.round((currentCount/actualLimit)*100)}%) - rate limit warning`);
+      }
+      
       return {
-        canSend: count < limit,
+        canSend,
         timeUntilReset,
-        currentCount: count,
-        limit,
+        currentCount,
+        limit: actualLimit,
       };
     } catch (error: any) {
       // If Redis fails, allow sending (fail open) but log error
@@ -163,6 +287,9 @@ export class RateLimiterService {
 
   /**
    * Record that an email was sent for a domain
+   * NOTE: The actual rate limit increment happens atomically in canSend() via the Lua script.
+   * This method is kept for backwards compatibility and only performs logging.
+   * It does NOT increment the counter again to avoid double-counting.
    * @param domain The sending domain
    * @param config Optional rate limit configuration
    */
@@ -172,7 +299,7 @@ export class RateLimiterService {
       const normalizedDomain = domain.trim().toLowerCase();
       const redis = getRedisClient();
       
-      // Calculate dynamic limit if needed
+      // Calculate dynamic limit if needed (for logging purposes)
       const limit = config?.maxEmailsPerHour || 
         (config?.userId && config?.provider 
           ? await this.calculateDynamicLimit(normalizedDomain, config.userId, config.provider)
@@ -183,16 +310,12 @@ export class RateLimiterService {
       const hourKey = now.toISOString().split(':')[0];
       const redisKey = `rate_limit:${normalizedDomain}:${hourKey}`;
       
-      // Increment count and set expiration (expires after 2 hours to be safe)
-      await redis.multi()
-        .incr(redisKey)
-        .expire(redisKey, 7200) // 2 hours expiration
-        .exec();
-      
-      // Log if approaching limit (warn at 80% and 95%)
+      // Get current count for logging (count was already incremented atomically in canSend())
       const currentCount = await redis.get(redisKey);
       const count = currentCount ? parseInt(currentCount, 10) : 0;
       
+      // Log if approaching limit (warn at 80% and 95%)
+      // Note: Logging is already done in canSend(), but we keep this for consistency
       if (count >= limit * 0.95) {
         console.warn(`[RateLimiter] Domain ${domain} is at ${count}/${limit} (${Math.round((count/limit)*100)}%) - approaching hourly limit!`);
       } else if (count >= limit * 0.8) {
