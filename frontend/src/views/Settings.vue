@@ -490,6 +490,88 @@
       </div>
 
       <div class="bg-paper border border-grid-light p-8">
+        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Failed Campaign Send Jobs</h2>
+        <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+          View and manage failed campaign send jobs. Failed jobs can prevent new campaigns from sending if they have the same job ID.
+        </p>
+        
+        <div class="space-y-4">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <p class="text-sm font-medium text-ink-900">
+                Failed Jobs: <span class="text-red-600">{{ failedJobs.length }}</span>
+              </p>
+            </div>
+            <div class="flex space-x-3">
+              <button
+                @click="loadFailedJobs"
+                :disabled="failedJobsLoading"
+                class="btn btn-ghost"
+              >
+                {{ failedJobsLoading ? 'Loading...' : 'Refresh' }}
+              </button>
+              <button
+                @click="cleanFailedJobs"
+                :disabled="failedJobsLoading || failedJobs.length === 0"
+                class="btn"
+                :class="failedJobs.length === 0 ? 'opacity-50 cursor-not-allowed' : 'btn-primary'"
+              >
+                Clean All Failed Jobs
+              </button>
+            </div>
+          </div>
+
+          <div v-if="failedJobs.length === 0 && !failedJobsLoading" class="p-4 border border-grid-light text-center">
+            <p class="text-sm text-ink-600">No failed jobs found. All campaign send jobs are healthy.</p>
+          </div>
+
+          <div v-else-if="failedJobsLoading" class="p-4 border border-grid-light text-center">
+            <p class="text-sm text-ink-600">Loading failed jobs...</p>
+          </div>
+
+          <div v-else class="space-y-4">
+            <div
+              v-for="job in failedJobs"
+              :key="job.id"
+              class="border border-red-200 bg-red-50 p-4"
+            >
+              <div class="flex justify-between items-start mb-2">
+                <div>
+                  <p class="text-sm font-medium text-ink-900">Job ID: {{ job.id }}</p>
+                  <p v-if="job.data?.campaignId" class="text-xs text-ink-600">
+                    Campaign ID: {{ job.data.campaignId }}, User ID: {{ job.data.userId }}
+                  </p>
+                </div>
+                <span class="px-2 py-1 text-xs uppercase tracking-wider bg-red-100 text-red-800">
+                  Failed
+                </span>
+              </div>
+              
+              <div class="mt-3 space-y-2">
+                <div>
+                  <p class="text-xs font-medium text-ink-700 mb-1">Error Reason:</p>
+                  <p class="text-xs text-ink-600 font-mono bg-white p-2 border border-red-200 rounded">
+                    {{ job.failedReason || 'No reason provided' }}
+                  </p>
+                </div>
+                
+                <div v-if="job.stacktrace && job.stacktrace.length > 0">
+                  <p class="text-xs font-medium text-ink-700 mb-1">Stack Trace:</p>
+                  <pre class="text-xs text-ink-600 font-mono bg-white p-2 border border-red-200 rounded overflow-auto max-h-32">{{ job.stacktrace.join('\n') }}</pre>
+                </div>
+                
+                <div class="flex items-center space-x-4 text-xs text-ink-500 mt-2">
+                  <span>Attempts: {{ job.attemptsMade || 0 }}</span>
+                  <span v-if="job.timestamp">Created: {{ new Date(job.timestamp).toLocaleString() }}</span>
+                  <span v-if="job.finishedOn">Failed: {{ new Date(job.finishedOn).toLocaleString() }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-paper border border-grid-light p-8">
         <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Footer Settings</h2>
         <p class="text-sm text-ink-600 mb-8 leading-relaxed">
           Customize the unsubscribe footer that is automatically added to all campaign and automation emails. This footer is required for compliance with email regulations (CAN-SPAM, GDPR, CASL).
@@ -569,6 +651,8 @@ const queueStatus = ref({
   message: '',
 })
 const queueLoading = ref(false)
+const failedJobs = ref<any[]>([])
+const failedJobsLoading = ref(false)
 
 async function loadProviders() {
   try {
@@ -761,10 +845,44 @@ async function resumeQueue() {
   }
 }
 
+async function loadFailedJobs() {
+  try {
+    failedJobsLoading.value = true
+    const response = await api.get('/admin/campaign-send/failed')
+    failedJobs.value = response.data.jobs || []
+  } catch (error: any) {
+    console.error('Failed to load failed jobs:', error)
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to load failed jobs'
+    alert(`Error: ${errorMessage}`)
+  } finally {
+    failedJobsLoading.value = false
+  }
+}
+
+async function cleanFailedJobs() {
+  if (!confirm(`Are you sure you want to remove all ${failedJobs.value.length} failed jobs? This will allow new campaigns with the same IDs to be sent.`)) {
+    return
+  }
+  
+  try {
+    failedJobsLoading.value = true
+    const response = await api.post('/admin/campaign-send/clean-failed')
+    alert(`Successfully removed ${response.data.cleaned} failed jobs.`)
+    await loadFailedJobs()
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to clean failed jobs'
+    alert(`Error: ${errorMessage}`)
+    console.error('Failed to clean failed jobs:', error)
+  } finally {
+    failedJobsLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadProviders()
   loadFooterSettings()
   checkQueueStatus()
+  loadFailedJobs()
 })
 </script>
 

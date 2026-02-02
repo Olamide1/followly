@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
-import { pauseEmailQueue, resumeEmailQueue, isEmailQueuePaused, getQueueJobCounts } from '../services/queues';
+import { pauseEmailQueue, resumeEmailQueue, isEmailQueuePaused, getQueueJobCounts, getCampaignSendQueue } from '../services/queues';
 import { pool } from '../database/connection';
 
 const router = Router();
@@ -139,6 +139,91 @@ router.get('/emails/pending', async (req: AuthRequest, res: Response, next: Next
         status: row.status,
         createdAt: row.created_at,
       })),
+    });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+/**
+ * Get failed campaign send jobs with error details
+ * GET /api/admin/campaign-send/failed
+ */
+router.get('/campaign-send/failed', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const campaignSendQueue = getCampaignSendQueue();
+    if (!campaignSendQueue) {
+      return res.status(500).json({ error: 'Campaign send queue not initialized' });
+    }
+
+    // Get failed jobs (limit to last 10 for performance)
+    const failedJobs = await campaignSendQueue.getFailed(0, 10);
+    
+    const failedJobsDetails = await Promise.all(
+      failedJobs.map(async (job) => {
+        try {
+          const state = await job.getState();
+          const failedReason = await job.failedReason;
+          const stacktrace = await job.stacktrace;
+          
+          return {
+            id: job.id,
+            name: job.name,
+            data: job.data,
+            state,
+            failedReason: failedReason || 'No reason provided',
+            stacktrace: stacktrace || 'No stacktrace',
+            attemptsMade: job.attemptsMade,
+            timestamp: job.timestamp,
+            processedOn: job.processedOn,
+            finishedOn: job.finishedOn,
+          };
+        } catch (error: any) {
+          return {
+            id: job.id,
+            error: `Failed to get job details: ${error?.message || error}`,
+          };
+        }
+      })
+    );
+
+    res.json({
+      count: failedJobs.length,
+      jobs: failedJobsDetails,
+    });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+/**
+ * Clean failed campaign send jobs
+ * POST /api/admin/campaign-send/clean-failed
+ */
+router.post('/campaign-send/clean-failed', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const campaignSendQueue = getCampaignSendQueue();
+    if (!campaignSendQueue) {
+      return res.status(500).json({ error: 'Campaign send queue not initialized' });
+    }
+
+    // Get all failed jobs
+    const failedJobs = await campaignSendQueue.getFailed(0, 1000);
+    let cleaned = 0;
+
+    for (const job of failedJobs) {
+      try {
+        await job.remove();
+        cleaned++;
+      } catch (error: any) {
+        console.error(`Failed to remove job ${job.id}:`, error?.message || error);
+      }
+    }
+
+    res.json({
+      success: true,
+      cleaned,
+      message: `Removed ${cleaned} failed jobs`,
     });
   } catch (error: any) {
     next(error);

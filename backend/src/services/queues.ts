@@ -410,6 +410,31 @@ export async function initializeQueues(): Promise<void> {
       try {
         const counts = await campaignSendQueue.getJobCounts();
         console.log('[Queue Init] Campaign send queue initial counts:', counts);
+        
+        // If there are failed jobs, log their details to help debug
+        if (counts.failed > 0) {
+          console.log(`[Queue Init] ⚠️ Found ${counts.failed} failed campaign send jobs. Inspecting...`);
+          try {
+            const failedJobs = await campaignSendQueue.getFailed(0, Math.min(counts.failed, 5));
+            for (const job of failedJobs) {
+              try {
+                const failedReason = await job.failedReason;
+                const stacktrace = await job.stacktrace;
+                console.error(`[Queue Init] Failed job ${job.id}:`, {
+                  data: job.data,
+                  failedReason: failedReason || 'No reason',
+                  stacktrace: stacktrace || 'No stacktrace',
+                  attemptsMade: job.attemptsMade,
+                  timestamp: job.timestamp,
+                });
+              } catch (jobError: any) {
+                console.error(`[Queue Init] Could not get details for failed job ${job.id}:`, jobError?.message || jobError);
+              }
+            }
+          } catch (failedError: any) {
+            console.error('[Queue Init] Could not retrieve failed jobs:', failedError?.message || failedError);
+          }
+        }
       } catch (error: any) {
         console.error('[Queue Init] Could not get campaign send queue counts:', error?.message || error);
       }
