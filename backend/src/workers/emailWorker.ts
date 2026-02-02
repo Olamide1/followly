@@ -25,44 +25,259 @@ const userProviderServices: Map<number, EmailProviderService> = new Map();
 /**
  * Safely delay a job, handling "Missing lock" errors by re-adding to queue
  * This prevents jobs from failing when the lock expires during processing
+ * 
+ * Improvements:
+ * - Checks job state before attempting delay
+ * - Updates email_queue record when re-queuing
+ * - Prevents duplicate email_queue records
+ * - Better error handling and logging
  */
 async function safelyDelayJob(job: Job, delayMs: number, reason: string): Promise<void> {
+  // Check current job state first
+  let currentState: string;
+  try {
+    currentState = await job.getState();
+  } catch (stateError: any) {
+    console.warn(`[Email Worker] Could not get state for job ${job.id}, assuming active:`, stateError?.message);
+    currentState = 'active';
+  }
+  
+  // If job is already completed or failed, don't try to delay it
+  if (currentState === 'completed' || currentState === 'failed') {
+    console.log(`[Email Worker] Job ${job.id} is already ${currentState}, skipping delay`);
+    return;
+  }
+  
+  // CRITICAL: If job is "active" (currently being processed), we're inside processEmailQueue
+  // This means rate limiting was checked and failed. We should NOT re-add to queue as that
+  // would create a duplicate. Instead, we'll try to delay it, but if that fails due to lock,
+  // we'll just let the job complete naturally (it will return early without sending).
+  // The job will be retried later by BullMQ's retry mechanism if needed.
+  if (currentState === 'active') {
+    console.log(`[Email Worker] Job ${job.id} is currently active (being processed). Rate limit check failed. Attempting to delay...`);
+    // Try to delay, but if lock is missing, that's OK - the job will complete without sending
+    // and won't create a duplicate
+  }
+  
+  // If job is already delayed, check if we need to update the delay
+  if (currentState === 'delayed') {
+    try {
+      // Get the current delay timestamp (when job is scheduled to run)
+      const currentDelayTimestamp = job.opts.delay || 0;
+      const targetDelayTimestamp = Date.now() + delayMs;
+      
+      // Only update if the new delay is significantly different (more than 1 minute)
+      // Compare the target timestamp with the current delay timestamp
+      if (Math.abs(targetDelayTimestamp - currentDelayTimestamp) > 60000) {
+        console.log(`[Email Worker] Job ${job.id} is already delayed, updating delay to ${Math.round(delayMs / 60000)} minutes`);
+        // Try to update delay - if it fails, we'll re-add below
+        try {
+          await job.moveToDelayed(targetDelayTimestamp);
+          return;
+        } catch (updateError: any) {
+          console.warn(`[Email Worker] Could not update delay for job ${job.id}, will re-add:`, updateError?.message);
+        }
+      } else {
+        // Delay is similar, no need to update
+        console.log(`[Email Worker] Job ${job.id} already has similar delay (${Math.round((currentDelayTimestamp - Date.now()) / 60000)} min), skipping update`);
+        return;
+      }
+    } catch (delayError: any) {
+      console.warn(`[Email Worker] Error checking delay for job ${job.id}:`, delayError?.message);
+    }
+  }
+  
   try {
     // Try to move job to delayed state
-    await job.moveToDelayed(Date.now() + delayMs);
+    const targetTimestamp = Date.now() + delayMs;
+    await job.moveToDelayed(targetTimestamp);
     console.log(`[Email Worker] Job ${job.id} delayed: ${reason} (${Math.round(delayMs / 60000)} minutes)`);
+    
+    // Update email_queue record to reflect the delay
+    const emailQueueId = job.data?.emailQueueId;
+    if (emailQueueId) {
+      try {
+        await pool.query(
+          `UPDATE email_queue 
+           SET status = 'queued', 
+               scheduled_at = $1,
+               error_message = $2
+           WHERE id = $3`,
+          [
+            new Date(targetTimestamp),
+            `Delayed: ${reason}. Will retry in ${Math.round(delayMs / 60000)} minutes.`,
+            emailQueueId
+          ]
+        );
+      } catch (dbError: any) {
+        // Log but don't fail - database update is secondary to queue operation
+        console.warn(`[Email Worker] Could not update email_queue record ${emailQueueId}:`, dbError?.message);
+      }
+    }
+    
+    return;
   } catch (error: any) {
-    // If "Missing lock" error, re-add job to queue with delay
-    if (error.message?.includes('Missing lock') || error.message?.includes('delayed')) {
-      console.warn(`[Email Worker] Job ${job.id} lock expired, re-adding to queue with delay: ${reason}`);
+    // If "Missing lock" error or other delay-related error, re-add job to queue with delay
+    const isLockError = error.message?.includes('Missing lock') || 
+                       error.message?.includes('delayed') ||
+                       error.message?.includes('lock') ||
+                       error.code === 'LOCK_ERROR';
+    
+    if (isLockError) {
+      // CRITICAL SAFETY CHECK: If job is "active", we're inside processEmailQueue
+      // Re-adding would create a duplicate. Instead, just log and let the job complete.
+      // The rate limit check already failed, so the email won't be sent anyway.
+      if (currentState === 'active') {
+        console.warn(
+          `[Email Worker] Job ${job.id} is active and lock expired. ` +
+          `Cannot delay without creating duplicate. Job will complete without sending due to rate limit. ` +
+          `Reason: ${reason}`
+        );
+        
+        // Update email_queue record to show it was delayed due to rate limit
+        const emailQueueId = job.data?.emailQueueId;
+        if (emailQueueId) {
+          try {
+            await pool.query(
+              `UPDATE email_queue 
+               SET status = 'queued', 
+                   scheduled_at = $1,
+                   error_message = $2
+               WHERE id = $3`,
+              [
+                new Date(Date.now() + delayMs),
+                `Rate limit reached during processing: ${reason}. Will be retried later.`,
+                emailQueueId
+              ]
+            );
+          } catch (dbError: any) {
+            console.warn(`[Email Worker] Could not update email_queue record ${emailQueueId}:`, dbError?.message);
+          }
+        }
+        
+        // Return early - don't re-add to queue to prevent duplicates
+        // The job will complete naturally and BullMQ will handle retries if configured
+        return;
+      }
+      
+      // For non-active jobs (waiting, delayed), safe to re-add
+      console.warn(`[Email Worker] Job ${job.id} lock expired (state: ${currentState}), re-adding to queue with delay: ${reason}`);
       
       try {
         const emailQueue = getEmailQueue();
+        const emailQueueId = job.data?.emailQueueId;
+        const targetTimestamp = Date.now() + delayMs;
+        
+        // Create unique job ID to prevent conflicts
+        const newJobId = emailQueueId 
+          ? `email-${emailQueueId}-retry-${Date.now()}`
+          : `retry-${job.id}-${Date.now()}`;
+        
+        // Check if a job with this emailQueueId already exists to prevent duplicates
+        if (emailQueueId) {
+          try {
+            const existingJob = await emailQueue.getJob(`email-${emailQueueId}`);
+            if (existingJob) {
+              const existingState = await existingJob.getState();
+              if (existingState === 'waiting' || existingState === 'delayed' || existingState === 'active') {
+                console.warn(
+                  `[Email Worker] Job for email_queue ${emailQueueId} already exists in state ${existingState}. ` +
+                  `Skipping re-add to prevent duplicate. Original job ${job.id} will be handled by BullMQ retry.`
+                );
+                return;
+              }
+            }
+          } catch (checkError: any) {
+            // Job doesn't exist or error checking - safe to proceed
+            console.log(`[Email Worker] No existing job found for email_queue ${emailQueueId}, proceeding with re-add`);
+          }
+        }
+        
         // Re-add job with same data and delay
-        await emailQueue.add(job.data, {
+        const newJob = await emailQueue.add(job.data, {
           delay: delayMs,
-          jobId: `retry-${job.id}-${Date.now()}`, // Unique ID to prevent conflicts
+          jobId: newJobId,
           attempts: job.opts.attempts || 3,
           removeOnComplete: job.opts.removeOnComplete || { age: 1800, count: 50 },
           removeOnFail: job.opts.removeOnFail || { age: 86400, count: 500 },
         });
         
-        // Remove the original job to prevent duplicates
-        try {
-          await job.remove();
-        } catch (removeError: any) {
-          // Ignore errors removing the job - it may already be removed
-          console.warn(`[Email Worker] Could not remove original job ${job.id}:`, removeError?.message);
+        // Update email_queue record to link to new job and reflect delay
+        if (emailQueueId) {
+          try {
+            await pool.query(
+              `UPDATE email_queue 
+               SET status = 'queued', 
+                   scheduled_at = $1,
+                   error_message = $2
+               WHERE id = $3`,
+              [
+                new Date(targetTimestamp),
+                `Re-queued due to lock expiration: ${reason}. Will retry in ${Math.round(delayMs / 60000)} minutes.`,
+                emailQueueId
+              ]
+            );
+          } catch (dbError: any) {
+            console.warn(`[Email Worker] Could not update email_queue record ${emailQueueId} after re-queue:`, dbError?.message);
+          }
         }
         
-        console.log(`[Email Worker] Job ${job.id} re-added to queue with ${Math.round(delayMs / 60000)} minute delay`);
+        // Try to remove the original job to prevent duplicates
+        // Use a timeout to prevent hanging if job removal is slow
+        const removePromise = job.remove();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), 2000)
+        );
+        
+        try {
+          await Promise.race([removePromise, timeoutPromise]);
+          console.log(`[Email Worker] Removed original job ${job.id}`);
+        } catch (removeError: any) {
+          // Ignore errors removing the job - it may already be removed or in a state that prevents removal
+          if (removeError.message !== 'Timeout') {
+            console.warn(`[Email Worker] Could not remove original job ${job.id}:`, removeError?.message);
+          } else {
+            console.warn(`[Email Worker] Timeout removing original job ${job.id}, continuing anyway`);
+          }
+        }
+        
+        console.log(`[Email Worker] Job ${job.id} re-added as ${newJob.id} with ${Math.round(delayMs / 60000)} minute delay`);
+        return;
       } catch (requeueError: any) {
-        console.error(`[Email Worker] Failed to re-add job ${job.id} to queue:`, requeueError?.message || requeueError);
+        console.error(`[Email Worker] Failed to re-add job ${job.id} to queue:`, {
+          error: requeueError?.message || requeueError,
+          stack: requeueError?.stack,
+        });
+        
+        // Update email_queue record to show the error
+        const emailQueueId = job.data?.emailQueueId;
+        if (emailQueueId) {
+          try {
+            await pool.query(
+              `UPDATE email_queue 
+               SET status = 'failed', 
+                   error_message = $1
+               WHERE id = $2`,
+              [
+                `Failed to re-queue after lock expiration: ${requeueError?.message || 'Unknown error'}. Original reason: ${reason}`,
+                emailQueueId
+              ]
+            );
+          } catch (dbError: any) {
+            console.error(`[Email Worker] Could not update email_queue record ${emailQueueId} after re-queue failure:`, dbError?.message);
+          }
+        }
+        
         // If re-queuing fails, throw the original error so job can be retried normally
         throw error;
       }
     } else {
       // Other errors should be thrown
+      console.error(`[Email Worker] Unexpected error delaying job ${job.id}:`, {
+        error: error?.message || error,
+        stack: error?.stack,
+        code: error?.code,
+      });
       throw error;
     }
   }

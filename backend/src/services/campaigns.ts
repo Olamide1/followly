@@ -5,6 +5,7 @@ import { RoutingService } from './routing';
 import { EmailProviderService } from './providers';
 import { getEmailQueue, getSchedulingQueue } from './queues';
 import { WarmupService } from './warmup';
+import { RateLimiterService } from './rateLimiter';
 
 export interface CampaignData {
   name: string;
@@ -764,7 +765,37 @@ export class CampaignService {
 
     const emailQueue = getEmailQueue();
     const fromEmail = campaign.from_email || process.env.DEFAULT_FROM_EMAIL || '';
+    const domain = fromEmail.split('@')[1] || '';
+    
+    // Get provider and rate limit to calculate proper delays
+    let provider: string = 'nodemailer'; // Default
+    let hourlyLimit = 41; // Default fallback
+    try {
+      const providerService = new EmailProviderService();
+      const routingService = new RoutingService(providerService);
+      const routingDecision = await routingService.selectProvider(userId, 'broadcast');
+      provider = routingDecision.provider;
+      
+      // Get current rate limit for this domain
+      const rateLimiterService = new RateLimiterService();
+      const rateLimitCheck = await rateLimiterService.canSend(domain, {
+        userId,
+        provider,
+      });
+      hourlyLimit = rateLimitCheck.limit;
+      console.log(`[Recover Campaign] Domain ${domain} has hourly limit of ${hourlyLimit} emails/hour`);
+    } catch (error: any) {
+      console.warn(`[Recover Campaign] Could not determine rate limit, using defaults:`, error?.message || error);
+    }
+    
+    // Calculate delay between emails to respect rate limit
+    // Space emails evenly across the hour (e.g., 41/hour = ~88 seconds between emails)
+    // Add some randomization to avoid exact spacing
+    const baseDelayMs = hourlyLimit > 0 ? Math.floor((3600000 / hourlyLimit) * 0.9) : 60000; // 90% of even spacing
+    const randomVariation = Math.floor(baseDelayMs * 0.2); // ±20% variation
+    
     let recovered = 0;
+    let cumulativeDelay = 0; // Track cumulative delay to space out emails
 
     for (const contact of contactsToQueue) {
       try {
@@ -806,8 +837,12 @@ export class CampaignService {
           }
         );
 
-        // Schedule for immediate send (no delay for recovery)
-        const scheduledAt = new Date();
+        // Calculate delay for this email (spaced out to respect rate limits)
+        const delayVariation = Math.floor(Math.random() * randomVariation * 2) - randomVariation;
+        const emailDelay = Math.max(0, baseDelayMs + delayVariation);
+        cumulativeDelay += emailDelay;
+        
+        const scheduledAt = new Date(Date.now() + cumulativeDelay);
 
         // Create email_queue record
         const emailQueueResult = await pool.query(
@@ -830,7 +865,7 @@ export class CampaignService {
         );
         const emailQueueId = emailQueueResult.rows[0].id;
 
-        // Add to Bull queue
+        // Add to Bull queue with delay to respect rate limits
         await emailQueue.add({
           userId,
           contactId: contact.id,
@@ -843,14 +878,25 @@ export class CampaignService {
           fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
           scheduledAt: scheduledAt.toISOString(),
         }, {
+          delay: emailDelay,
           jobId: `email-${emailQueueId}`,
         });
 
         recovered++;
+        
+        // Log progress every 10 emails
+        if (recovered % 10 === 0) {
+          console.log(`[Recover Campaign] Recovered ${recovered}/${contactsToQueue.length} emails, spaced ${Math.round(emailDelay / 1000)}s apart`);
+        }
       } catch (error: any) {
         errors.push(`Failed to recover email for ${contact.email}: ${error.message}`);
         console.error(`Failed to recover email for contact ${contact.id}:`, error);
       }
+    }
+    
+    if (recovered > 0) {
+      const totalDelayMinutes = Math.round(cumulativeDelay / 60000);
+      console.log(`[Recover Campaign] Successfully recovered ${recovered} emails for campaign ${campaignId}. Emails spaced out over ~${totalDelayMinutes} minutes to respect rate limit (${hourlyLimit}/hour)`);
     }
 
     // Update campaign status back to 'sending' if it was 'sent' and we recovered some
