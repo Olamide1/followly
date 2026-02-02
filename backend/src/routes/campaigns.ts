@@ -153,15 +153,58 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
       const jobId = `campaign-send-${campaignId}-${userId}`;
       console.log(`[Campaign Send Route] Adding job with ID: ${jobId}`);
       
-      const job = await campaignSendQueue.add({
-        userId,
-        campaignId,
-      }, {
-        jobId,
-        attempts: 2,
-      });
-
-      console.log(`[Campaign Send Route] ✅ Successfully queued campaign ${campaignId} send job: ${job.id}`);
+      // Check if there's an existing job with this ID (might be failed)
+      const existingJob = await campaignSendQueue.getJob(jobId);
+      if (existingJob) {
+        const existingState = await existingJob.getState();
+        console.log(`[Campaign Send Route] Found existing job ${jobId} with state: ${existingState}`);
+        
+        // If it's failed, remove it so we can add a fresh one
+        if (existingState === 'failed' || existingState === 'completed') {
+          console.log(`[Campaign Send Route] Removing existing ${existingState} job ${jobId} to allow retry`);
+          await existingJob.remove();
+        } else if (existingState === 'active' || existingState === 'waiting') {
+          console.log(`[Campaign Send Route] ⚠️ Job ${jobId} is already ${existingState}, not adding duplicate`);
+          res.json({ 
+            success: true,
+            message: 'Campaign send job already exists and is processing.',
+            jobId: existingJob.id,
+            queued: 0,
+          });
+          return;
+        }
+      }
+      
+      let job;
+      try {
+        job = await campaignSendQueue.add({
+          userId,
+          campaignId,
+        }, {
+          jobId,
+          attempts: 2,
+        });
+        console.log(`[Campaign Send Route] ✅ Successfully queued campaign ${campaignId} send job: ${job.id}`);
+      } catch (addError: any) {
+        console.error(`[Campaign Send Route] ❌ Error adding job to queue:`, {
+          error: addError?.message || addError,
+          stack: addError?.stack,
+          name: addError?.name,
+        });
+        throw addError;
+      }
+      
+      // Immediately check job state after adding
+      try {
+        const immediateState = await job.getState();
+        console.log(`[Campaign Send Route] Job ${job.id} immediate state after add: ${immediateState}`);
+        if (immediateState === 'failed') {
+          const failedReason = await job.failedReason;
+          console.error(`[Campaign Send Route] ⚠️ Job failed immediately! Reason: ${failedReason || 'Unknown'}`);
+        }
+      } catch (stateError: any) {
+        console.warn(`[Campaign Send Route] Could not get immediate job state:`, stateError?.message || stateError);
+      }
       
       // Verify job was actually added to queue
       const jobCounts = await campaignSendQueue.getJobCounts();
@@ -177,7 +220,28 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
       try {
         const jobData = await campaignSendQueue.getJob(job.id);
         if (jobData) {
-          console.log(`[Campaign Send Route] ✅ Verified job ${job.id} exists in Redis. State: ${await jobData.getState()}`);
+          const jobState = await jobData.getState();
+          console.log(`[Campaign Send Route] ✅ Verified job ${job.id} exists in Redis. State: ${jobState}`);
+          
+          // If job is failed, get the error details
+          if (jobState === 'failed') {
+            const failedReason = await jobData.failedReason;
+            const stacktrace = await jobData.stacktrace;
+            console.error(`[Campaign Send Route] ❌ Job ${job.id} is in FAILED state!`, {
+              failedReason: failedReason || 'No reason provided',
+              stacktrace: stacktrace || 'No stacktrace',
+              attemptsMade: jobData.attemptsMade,
+              timestamp: jobData.timestamp,
+            });
+            
+            // Try to get the full error from the job's returnvalue
+            try {
+              const returnvalue = await jobData.returnvalue;
+              console.error(`[Campaign Send Route] Job returnvalue:`, returnvalue);
+            } catch (e) {
+              // Ignore
+            }
+          }
         } else {
           console.error(`[Campaign Send Route] ⚠️ WARNING: Job ${job.id} was added but not found in Redis!`);
         }
