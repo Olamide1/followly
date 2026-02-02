@@ -457,6 +457,41 @@ function startQueueCleanup(): void {
 }
 
 /**
+ * Recover stuck campaigns in "sending" state
+ * Finds campaigns that have been stuck for more than 10 minutes with no emails queued
+ */
+async function recoverStuckCampaigns(): Promise<void> {
+  try {
+    const { pool } = await import('../database/connection');
+    
+    // Find campaigns stuck in "sending" state for more than 10 minutes
+    // with no pending/queued/sending emails
+    const result = await pool.query(
+      `UPDATE campaigns c
+       SET status = 'draft'
+       WHERE c.status = 'sending'
+         AND c.updated_at < NOW() - INTERVAL '10 minutes'
+         AND NOT EXISTS (
+           SELECT 1 FROM email_queue eq
+           WHERE eq.campaign_id = c.id
+             AND eq.status IN ('pending', 'queued', 'sending')
+         )
+       RETURNING c.id, c.name, c.user_id`,
+      []
+    );
+    
+    if (result.rows.length > 0) {
+      console.log(`[Campaign Recovery] Recovered ${result.rows.length} stuck campaigns from "sending" state`);
+      result.rows.forEach((row: any) => {
+        console.log(`[Campaign Recovery] Reset campaign ${row.id} (${row.name}) for user ${row.user_id}`);
+      });
+    }
+  } catch (error: any) {
+    console.error('[Campaign Recovery] Failed to recover stuck campaigns:', error?.message || error);
+  }
+}
+
+/**
  * Periodic recovery of stuck emails in "sending" state
  * Runs every 10 minutes to find emails that have been stuck for too long
  */
@@ -465,9 +500,14 @@ function startStuckEmailRecovery(): void {
   
   // Run recovery immediately, then every 10 minutes
   recoverStuckEmails();
-  setInterval(recoverStuckEmails, RECOVERY_INTERVAL);
+  recoverStuckCampaigns(); // Also recover stuck campaigns
+  setInterval(() => {
+    recoverStuckEmails();
+    recoverStuckCampaigns();
+  }, RECOVERY_INTERVAL);
   
   console.log('✅ Stuck email recovery scheduled (runs every 10 minutes)');
+  console.log('✅ Stuck campaign recovery scheduled (runs every 10 minutes)');
 }
 
 /**

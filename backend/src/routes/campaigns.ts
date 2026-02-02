@@ -81,10 +81,31 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
     // Validate campaign exists and belongs to user before queuing
     const campaign = await campaignService.getCampaign(userId, campaignId);
 
-    // Check if campaign is already sent or sending
-    if (campaign.status === 'sending' || campaign.status === 'sent') {
-      res.status(400).json({ error: 'Campaign already sent or sending' });
+    // Check if campaign is already sent
+    if (campaign.status === 'sent') {
+      res.status(400).json({ error: 'Campaign already sent' });
       return;
+    }
+
+    // If campaign is "sending", check if it's actually stuck (no emails queued)
+    // This allows recovery of stuck campaigns
+    if (campaign.status === 'sending') {
+      const { pool } = await import('../database/connection');
+      const emailCheck = await pool.query(
+        `SELECT COUNT(*) as count FROM email_queue 
+         WHERE campaign_id = $1 AND status IN ('pending', 'queued', 'sending')`,
+        [campaignId]
+      );
+      const pendingCount = parseInt(emailCheck.rows[0]?.count || '0');
+      
+      if (pendingCount > 0) {
+        // Emails are queued, campaign is actually sending
+        res.status(400).json({ error: 'Campaign already sending' });
+        return;
+      }
+      
+      // No emails queued - campaign is stuck, allow retry (worker will handle reset)
+      console.log(`[Campaign Send Route] Campaign ${campaignId} appears stuck (status=sending but no emails queued), allowing retry`);
     }
 
     // Validate list_id
