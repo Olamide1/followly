@@ -300,6 +300,143 @@ router.post('/warmup/complete', async (req: AuthRequest, res: Response, next: Ne
 });
 
 /**
+ * Get comprehensive sending diagnostics - warmup, rate limits, queue status
+ * GET /api/admin/sending/diagnostics
+ */
+router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const { WarmupService } = await import('../services/warmup');
+    const { RateLimiterService } = await import('../services/rateLimiter');
+    const { getEmailQueue, getQueueJobCounts } = await import('../services/queues');
+    
+    const warmupService = new WarmupService();
+    const rateLimiterService = new RateLimiterService();
+    
+    // Get warmup status
+    const providers = await pool.query(
+      `SELECT DISTINCT 
+        SUBSTRING(from_email FROM '@(.*)$')::text as domain,
+        provider
+       FROM provider_configs
+       WHERE user_id = $1 AND is_active = true AND from_email IS NOT NULL`,
+      [userId]
+    );
+    
+    const warmupDetails = await Promise.all(
+      providers.rows.map(async (row: any) => {
+        const schedule = await warmupService.getWarmupSchedule(userId, row.domain, row.provider);
+        const dailyLimit = schedule ? await warmupService.getDailyLimit(userId, row.domain, row.provider) : null;
+        const hourlyLimit = dailyLimit ? Math.max(2, Math.floor(dailyLimit / 12)) : null;
+        
+        // Get current rate limit status
+        let rateLimitStatus = null;
+        try {
+          rateLimitStatus = await rateLimiterService.canSend(row.domain, {
+            userId,
+            provider: row.provider,
+          });
+        } catch (error: any) {
+          console.error(`[Diagnostics] Error getting rate limit for ${row.domain}:`, error?.message);
+        }
+        
+        return {
+          domain: row.domain,
+          provider: row.provider,
+          warmup: {
+            inWarmup: !!schedule,
+            phase: schedule?.phase || null,
+            status: schedule?.status || null,
+            dailyLimit: dailyLimit,
+            hourlyLimit: hourlyLimit,
+            currentCount: schedule?.current_count || 0,
+            remainingToday: dailyLimit ? Math.max(0, dailyLimit - (schedule?.current_count || 0)) : null,
+            startDate: schedule?.start_date || null,
+          },
+          rateLimit: rateLimitStatus,
+        };
+      })
+    );
+    
+    // Get queue status
+    const queueCounts = await getQueueJobCounts();
+    const emailQueue = getEmailQueue();
+    const emailQueueCounts = await emailQueue.getJobCounts();
+    
+    // Get email status from database
+    const emailStatus = await pool.query(
+      `SELECT 
+        status,
+        COUNT(*) as count
+       FROM email_queue
+       WHERE user_id = $1
+       GROUP BY status
+       ORDER BY status`,
+      [userId]
+    );
+    
+    const statusCounts: Record<string, number> = {};
+    emailStatus.rows.forEach((row: any) => {
+      statusCounts[row.status] = parseInt(row.count || '0');
+    });
+    
+    // Get emails sent in last hour
+    const lastHour = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM email_queue
+       WHERE user_id = $1 
+         AND status = 'sent'
+         AND sent_at > NOW() - INTERVAL '1 hour'`,
+      [userId]
+    );
+    
+    const sentLastHour = parseInt(lastHour.rows[0]?.count || '0');
+    
+    // Get emails sent today
+    const today = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM email_queue
+       WHERE user_id = $1 
+         AND status = 'sent'
+         AND DATE(sent_at) = CURRENT_DATE`,
+      [userId]
+    );
+    
+    const sentToday = parseInt(today.rows[0]?.count || '0');
+    
+    res.json({
+      warmup: warmupDetails,
+      queue: {
+        emailQueue: {
+          waiting: emailQueueCounts.waiting || 0,
+          active: emailQueueCounts.active || 0,
+          delayed: emailQueueCounts.delayed || 0,
+          failed: emailQueueCounts.failed || 0,
+          completed: emailQueueCounts.completed || 0,
+        },
+        allQueues: queueCounts,
+      },
+      emails: {
+        statusBreakdown: statusCounts,
+        sentLastHour: sentLastHour,
+        sentToday: sentToday,
+        pending: (statusCounts.pending || 0) + (statusCounts.queued || 0) + (statusCounts.sending || 0),
+      },
+      summary: {
+        canSendMore: warmupDetails.some(d => d.warmup.remainingToday && d.warmup.remainingToday > 0),
+        totalRemainingToday: warmupDetails.reduce((sum, d) => sum + (d.warmup.remainingToday || 0), 0),
+        emailsWaiting: emailQueueCounts.waiting || 0,
+        emailsDelayed: emailQueueCounts.delayed || 0,
+        currentHourlyRate: sentLastHour,
+        expectedHourlyRate: warmupDetails[0]?.warmup.hourlyLimit || null,
+      },
+    });
+  } catch (error: any) {
+    return next(error);
+  }
+});
+
+/**
  * Get email queue diagnostics - check if emails are being processed
  * GET /api/admin/emails/diagnostics
  */

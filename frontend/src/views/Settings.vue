@@ -892,6 +892,8 @@ const temporaryModalSchedule = ref<any>(null)
 const increaseLimitValue = ref<number>(500)
 const temporaryLimitValue = ref<number>(500)
 const temporaryDaysValue = ref<number>(7)
+const sendingDiagnostics = ref<any>(null)
+const diagnosticsLoading = ref(false)
 
 async function loadProviders() {
   try {
@@ -1136,6 +1138,20 @@ async function loadWarmupStatus() {
   }
 }
 
+async function loadSendingDiagnostics() {
+  try {
+    diagnosticsLoading.value = true
+    const response = await api.get('/admin/sending/diagnostics')
+    sendingDiagnostics.value = response.data
+  } catch (error: any) {
+    console.error('Failed to load sending diagnostics:', error)
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to load diagnostics'
+    // Don't alert - just log, diagnostics are nice-to-have
+  } finally {
+    diagnosticsLoading.value = false
+  }
+}
+
 async function fastTrackWarmup(domain: string, provider: string) {
   if (!confirm(`Fast-track warmup for ${domain} (${provider}) to Phase 3 (500/day)? Warmup monitoring will remain active.`)) {
     return
@@ -1263,6 +1279,7 @@ onMounted(() => {
   checkQueueStatus()
   loadFailedJobs()
   loadWarmupStatus()
+  loadSendingDiagnostics()
 })
 </script>
 
