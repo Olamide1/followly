@@ -105,6 +105,14 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
       console.warn(`[Campaign Send] Could not get contact count estimate: ${error.message}`);
     }
 
+    // Update campaign status to "sending" immediately for UI feedback
+    // This happens before queuing so the frontend updates right away
+    const { pool } = await import('../database/connection');
+    await pool.query(
+      'UPDATE campaigns SET status = $1 WHERE id = $2',
+      ['sending', campaignId]
+    );
+
     // Queue the campaign send job for async processing
     const campaignSendQueue = getCampaignSendQueue();
     const job = await campaignSendQueue.add({

@@ -51,7 +51,7 @@ export function getRedisConfig() {
       // maxRetriesPerRequest: null allows ioredis to manage retries more efficiently
       maxRetriesPerRequest: null, // Disable automatic retries (Bull handles retries)
       connectTimeout: 10000, // 10 second connection timeout
-      lazyConnect: true, // Connect only when queues are actually used (when adding/processing jobs)
+      lazyConnect: false, // Connect immediately - worker needs active connection to process jobs
       keepAlive: 30000, // Send keepalive every 30 seconds
     };
   }
