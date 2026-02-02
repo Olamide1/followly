@@ -6,8 +6,14 @@
     </div>
 
     <div class="space-y-8 sm:space-y-12">
-      <div class="bg-paper border border-grid-light p-8">
-        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Providers</h2>
+      <!-- SECTION 1: EMAIL CONFIGURATION -->
+      <div>
+        <h2 class="text-lg font-normal text-ink-900 mb-6">Email Configuration</h2>
+        <p class="text-sm text-ink-600 mb-6">Configure your email providers and sending infrastructure.</p>
+        
+        <div class="space-y-6">
+          <div class="bg-paper border border-grid-light p-8">
+            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Providers</h3>
         <p class="text-sm text-ink-600 mb-8 leading-relaxed">
           Connect your own email providers or use Followly's infrastructure.
         </p>
@@ -83,9 +89,9 @@
         </div>
       </div>
 
-      <div class="bg-paper border border-grid-light p-8">
-        <div class="flex items-center justify-between mb-6">
-          <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider">Setup Guide</h2>
+          <div class="bg-paper border border-grid-light p-8">
+            <div class="flex items-center justify-between mb-6">
+              <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider">Setup Guide</h3>
           <button
             @click="showGuide = !showGuide"
             class="text-xs text-ink-500 hover:text-ink-900 uppercase tracking-wider"
@@ -245,8 +251,8 @@
         </div>
       </div>
 
-      <div class="bg-paper border border-grid-light p-8">
-        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-8">Add Provider</h2>
+          <div class="bg-paper border border-grid-light p-8">
+            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-8">Add Provider</h3>
         <form @submit.prevent="addProvider" class="space-y-6 sm:space-y-8">
           <div>
             <label for="provider" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
@@ -429,68 +435,78 @@
             </label>
           </div>
 
-          <button type="submit" class="btn btn-primary w-full sm:w-auto">Add Provider</button>
-        </form>
-      </div>
-
-      <div class="bg-paper border border-grid-light p-8">
-        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Queue Management</h2>
-        <p class="text-sm text-ink-600 mb-8 leading-relaxed">
-          Control email queue processing. Pause to stop sending emails immediately, or resume to continue processing.
-        </p>
-        
-        <div class="space-y-4">
-          <div class="flex items-center justify-between p-4 border border-grid-light">
-            <div>
-              <p class="text-sm font-medium text-ink-900 mb-1">Email Queue Status</p>
-              <p class="text-xs text-ink-600">
-                {{ queueStatus.paused ? 'Queue is paused - no new emails will be processed' : 'Queue is active - emails are being processed' }}
-              </p>
-            </div>
-            <div class="flex items-center space-x-2">
-              <span 
-                class="px-3 py-1 text-xs uppercase tracking-wider"
-                :class="queueStatus.paused ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'"
-              >
-                {{ queueStatus.paused ? 'Paused' : 'Active' }}
-              </span>
-            </div>
-          </div>
-          
-          <div class="flex space-x-3">
-            <button
-              @click="pauseQueue"
-              :disabled="queueStatus.paused || queueLoading"
-              class="btn"
-              :class="queueStatus.paused ? 'opacity-50 cursor-not-allowed' : 'btn-primary'"
-            >
-              {{ queueLoading ? 'Pausing...' : 'Pause Queue' }}
-            </button>
-            <button
-              @click="resumeQueue"
-              :disabled="!queueStatus.paused || queueLoading"
-              class="btn"
-              :class="!queueStatus.paused ? 'opacity-50 cursor-not-allowed' : 'btn-primary'"
-            >
-              {{ queueLoading ? 'Resuming...' : 'Resume Queue' }}
-            </button>
-            <button
-              @click="checkQueueStatus"
-              :disabled="queueLoading"
-              class="btn btn-ghost"
-            >
-              Refresh Status
-            </button>
-          </div>
-          
-          <div v-if="queueStatus.message" class="mt-4 p-4 border-l-2 border-ink-900 bg-ink-50">
-            <p class="text-xs text-ink-700">{{ queueStatus.message }}</p>
-          </div>
+            <button type="submit" class="btn btn-primary w-full sm:w-auto">Add Provider</button>
+          </form>
+        </div>
         </div>
       </div>
 
-      <div class="bg-paper border border-grid-light p-8">
-        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Failed Campaign Send Jobs</h2>
+      <!-- SECTION 2: SENDING & DELIVERY -->
+      <div>
+        <h2 class="text-lg font-normal text-ink-900 mb-6">Sending & Delivery</h2>
+        <p class="text-sm text-ink-600 mb-6">Monitor sending performance, manage warmup schedules, and control queue processing.</p>
+        
+        <div class="space-y-6">
+          <!-- Queue Management -->
+          <div class="bg-paper border border-grid-light p-8">
+            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Queue Management</h3>
+            <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+              Control email queue processing. Pause to stop sending emails immediately, or resume to continue processing.
+            </p>
+            
+            <div class="space-y-4">
+              <div class="flex items-center justify-between p-4 border border-grid-light">
+                <div>
+                  <p class="text-sm font-medium text-ink-900 mb-1">Email Queue Status</p>
+                  <p class="text-xs text-ink-600">
+                    {{ queueStatus.paused ? 'Queue is paused - no new emails will be processed' : 'Queue is active - emails are being processed' }}
+                  </p>
+                </div>
+                <div class="flex items-center space-x-2">
+                  <span 
+                    class="px-3 py-1 text-xs uppercase tracking-wider"
+                    :class="queueStatus.paused ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'"
+                  >
+                    {{ queueStatus.paused ? 'Paused' : 'Active' }}
+                  </span>
+                </div>
+              </div>
+              
+              <div class="flex space-x-3">
+                <button
+                  @click="pauseQueue"
+                  :disabled="queueStatus.paused || queueLoading"
+                  class="btn"
+                  :class="queueStatus.paused ? 'opacity-50 cursor-not-allowed' : 'btn-primary'"
+                >
+                  {{ queueLoading ? 'Pausing...' : 'Pause Queue' }}
+                </button>
+                <button
+                  @click="resumeQueue"
+                  :disabled="!queueStatus.paused || queueLoading"
+                  class="btn"
+                  :class="!queueStatus.paused ? 'opacity-50 cursor-not-allowed' : 'btn-primary'"
+                >
+                  {{ queueLoading ? 'Resuming...' : 'Resume Queue' }}
+                </button>
+                <button
+                  @click="checkQueueStatus"
+                  :disabled="queueLoading"
+                  class="btn btn-ghost"
+                >
+                  Refresh Status
+                </button>
+              </div>
+              
+              <div v-if="queueStatus.message" class="mt-4 p-4 border-l-2 border-ink-900 bg-ink-50">
+                <p class="text-xs text-ink-700">{{ queueStatus.message }}</p>
+              </div>
+        </div>
+          </div>
+
+          <!-- Failed Campaign Send Jobs -->
+          <div class="bg-paper border border-grid-light p-8">
+            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Failed Campaign Send Jobs</h3>
         <p class="text-sm text-ink-600 mb-8 leading-relaxed">
           View and manage failed campaign send jobs. Failed jobs can prevent new campaigns from sending if they have the same job ID.
         </p>
@@ -569,10 +585,228 @@
             </div>
           </div>
         </div>
-      </div>
+          </div>
 
-      <div class="bg-paper border border-grid-light p-8">
-        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Warmup Management</h2>
+          <!-- Campaign Email Status -->
+          <div class="bg-paper border border-grid-light p-8">
+            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Campaign Email Status</h3>
+            <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+              View and manage individual email statuses for your campaigns. Filter by status, view details, and recover failed emails.
+            </p>
+            
+            <div class="space-y-6">
+              <!-- Campaign Selection -->
+              <div>
+                <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                  Select Campaign
+                </label>
+                <div class="flex space-x-3">
+                  <select
+                    v-model="selectedCampaignId"
+                    @change="onCampaignChange"
+                    :disabled="campaignsLoading"
+                    class="input flex-1"
+                  >
+                    <option value="">-- Select a campaign --</option>
+                    <option
+                      v-for="campaign in campaigns"
+                      :key="campaign.id"
+                      :value="campaign.id"
+                    >
+                      {{ campaign.name }} ({{ campaign.status }})
+                    </option>
+                  </select>
+                  <button
+                    @click="loadCampaigns"
+                    :disabled="campaignsLoading"
+                    class="btn btn-ghost"
+                  >
+                    {{ campaignsLoading ? 'Loading...' : 'Refresh' }}
+                  </button>
+                </div>
+                <p v-if="campaignsLoading" class="text-xs text-ink-500 mt-2">Loading campaigns...</p>
+                <p v-else-if="campaigns.length === 0" class="text-xs text-ink-500 mt-2">No campaigns found.</p>
+              </div>
+
+              <!-- Status Breakdown -->
+              <div v-if="selectedCampaignId && campaignEmailStatus.statusCounts" class="border border-grid-light p-4 bg-ink-50">
+                <h4 class="text-sm font-medium text-ink-900 mb-4">Status Breakdown</h4>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div
+                    v-for="(count, status) in campaignEmailStatus.statusCounts"
+                    :key="status"
+                    class="text-center p-3 border border-grid-light bg-white cursor-pointer hover:border-ink-400 transition-colors"
+                    :class="{ 'border-ink-900 bg-ink-100': campaignEmailFilter === status }"
+                    @click="setStatusFilter(status === campaignEmailFilter ? '' : status)"
+                  >
+                    <p class="text-xs text-ink-500 uppercase tracking-wider mb-1">{{ status }}</p>
+                    <p class="text-lg font-medium text-ink-900">{{ count }}</p>
+                  </div>
+                </div>
+                <div class="mt-4 flex items-center justify-between">
+                  <div>
+                    <p class="text-xs text-ink-600">
+                      Total: <span class="font-medium text-ink-900">{{ campaignEmailStatus.total || 0 }}</span>
+                    </p>
+                  </div>
+                  <button
+                    v-if="campaignEmailFilter"
+                    @click="setStatusFilter('')"
+                    class="btn btn-ghost text-xs"
+                  >
+                    Clear Filter
+                  </button>
+                </div>
+              </div>
+
+              <!-- Loading State -->
+              <div v-if="campaignEmailsLoading && selectedCampaignId" class="p-8 border border-grid-light text-center">
+                <p class="text-sm text-ink-600">Loading email statuses...</p>
+              </div>
+
+              <!-- Error State -->
+              <div v-if="campaignEmailError" class="p-4 border-l-2 border-red-500 bg-red-50">
+                <p class="text-sm text-red-700">{{ campaignEmailError }}</p>
+                <button
+                  @click="loadCampaignEmails"
+                  class="btn btn-ghost text-xs mt-2"
+                >
+                  Retry
+                </button>
+              </div>
+
+              <!-- Empty State -->
+              <div v-if="selectedCampaignId && !campaignEmailsLoading && !campaignEmailError && campaignEmailStatus.emails && campaignEmailStatus.emails.length === 0" class="p-8 border border-grid-light text-center">
+                <p class="text-sm text-ink-600">
+                  {{ campaignEmailFilter ? `No emails found with status "${campaignEmailFilter}"` : 'No emails found for this campaign.' }}
+                </p>
+              </div>
+
+              <!-- Email List -->
+              <div v-if="selectedCampaignId && !campaignEmailsLoading && !campaignEmailError && campaignEmailStatus.emails && campaignEmailStatus.emails.length > 0" class="space-y-4">
+                <div class="flex items-center justify-between">
+                  <p class="text-sm text-ink-600">
+                    Showing {{ campaignEmailStatus.emails.length }} of {{ campaignEmailStatus.total }} emails
+                    <span v-if="campaignEmailFilter">(filtered by: {{ campaignEmailFilter }})</span>
+                  </p>
+                  <div class="flex space-x-2">
+                    <button
+                      v-if="hasFailedEmails"
+                      @click="recoverCampaignEmails"
+                      :disabled="recoveringEmails"
+                      class="btn btn-primary text-xs"
+                    >
+                      {{ recoveringEmails ? 'Recovering...' : 'Recover Failed Emails' }}
+                    </button>
+                    <button
+                      @click="loadCampaignEmails"
+                      :disabled="campaignEmailsLoading"
+                      class="btn btn-ghost text-xs"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Pagination -->
+                <div v-if="campaignEmailStatus.total > campaignEmailStatus.limit" class="flex items-center justify-between text-xs text-ink-600">
+                  <button
+                    @click="previousPage"
+                    :disabled="campaignEmailOffset === 0 || campaignEmailsLoading"
+                    class="btn btn-ghost text-xs"
+                  >
+                    Previous
+                  </button>
+                  <span>
+                    Page {{ Math.floor(campaignEmailOffset / campaignEmailStatus.limit) + 1 }} of {{ Math.ceil(campaignEmailStatus.total / campaignEmailStatus.limit) }}
+                  </span>
+                  <button
+                    @click="nextPage"
+                    :disabled="campaignEmailOffset + campaignEmailStatus.limit >= campaignEmailStatus.total || campaignEmailsLoading"
+                    class="btn btn-ghost text-xs"
+                  >
+                    Next
+                  </button>
+                </div>
+
+                <!-- Email Items -->
+                <div class="space-y-2">
+                  <div
+                    v-for="email in campaignEmailStatus.emails"
+                    :key="email.id"
+                    class="border border-grid-light p-4 hover:border-ink-400 transition-colors"
+                    :class="getEmailStatusClass(email.status)"
+                  >
+                    <div class="flex justify-between items-start mb-2">
+                      <div class="flex-1">
+                        <p class="text-sm font-medium text-ink-900">{{ email.to_email }}</p>
+                        <p v-if="email.contact_name" class="text-xs text-ink-600">{{ email.contact_name }}</p>
+                      </div>
+                      <span
+                        class="px-2 py-1 text-xs uppercase tracking-wider"
+                        :class="getEmailStatusBadgeClass(email.status)"
+                      >
+                        {{ email.status }}
+                      </span>
+                    </div>
+                    
+                    <div class="mt-3 space-y-1 text-xs text-ink-600">
+                      <div v-if="email.scheduled_at" class="flex items-center space-x-2">
+                        <span class="text-ink-500">Scheduled:</span>
+                        <span>{{ new Date(email.scheduled_at).toLocaleString() }}</span>
+                      </div>
+                      <div v-if="email.sent_at" class="flex items-center space-x-2">
+                        <span class="text-ink-500">Sent:</span>
+                        <span>{{ new Date(email.sent_at).toLocaleString() }}</span>
+                      </div>
+                      <div v-if="email.created_at" class="flex items-center space-x-2">
+                        <span class="text-ink-500">Created:</span>
+                        <span>{{ new Date(email.created_at).toLocaleString() }}</span>
+                      </div>
+                      <div v-if="email.provider" class="flex items-center space-x-2">
+                        <span class="text-ink-500">Provider:</span>
+                        <span>{{ email.provider }}</span>
+                      </div>
+                      <div v-if="email.retry_count > 0" class="flex items-center space-x-2">
+                        <span class="text-ink-500">Retries:</span>
+                        <span>{{ email.retry_count }}</span>
+                      </div>
+                    </div>
+                    
+                    <div v-if="email.error_message" class="mt-3 p-2 bg-red-50 border border-red-200 rounded">
+                      <p class="text-xs font-medium text-red-700 mb-1">Error:</p>
+                      <p class="text-xs text-red-600 font-mono break-words">{{ email.error_message }}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Pagination (bottom) -->
+                <div v-if="campaignEmailStatus.total > campaignEmailStatus.limit" class="flex items-center justify-between text-xs text-ink-600 pt-4 border-t border-grid-light">
+                  <button
+                    @click="previousPage"
+                    :disabled="campaignEmailOffset === 0 || campaignEmailsLoading"
+                    class="btn btn-ghost text-xs"
+                  >
+                    Previous
+                  </button>
+                  <span>
+                    Page {{ Math.floor(campaignEmailOffset / campaignEmailStatus.limit) + 1 }} of {{ Math.ceil(campaignEmailStatus.total / campaignEmailStatus.limit) }}
+                  </span>
+                  <button
+                    @click="nextPage"
+                    :disabled="campaignEmailOffset + campaignEmailStatus.limit >= campaignEmailStatus.total || campaignEmailsLoading"
+                    class="btn btn-ghost text-xs"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Email Warmup Management -->
+          <div class="bg-paper border border-grid-light p-8">
+            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Warmup Management</h3>
         <p class="text-sm text-ink-600 mb-8 leading-relaxed">
           Manage domain warmup schedules to safely increase sending capacity. Warmup protects your domain reputation by gradually increasing limits while monitoring bounce and complaint rates.
         </p>
@@ -653,28 +887,34 @@
               <div v-if="sendingDiagnostics.summary.emailsWaiting > 0" class="text-yellow-600">
                 ⏳ {{ sendingDiagnostics.summary.emailsWaiting }} emails waiting in queue
               </div>
+              </div>
             </div>
           </div>
-        </div>
-        
-        <div class="space-y-4">
-          <div class="flex items-center justify-between mb-4">
-            <div>
-              <p class="text-sm font-medium text-ink-900">
-                Domains in Warmup: <span class="text-blue-600">{{ warmupSummary.domainsInWarmup }}</span> / {{ warmupSummary.totalDomains }}
-              </p>
-              <p class="text-xs text-ink-600 mt-1">
-                Total Remaining Today: <span class="font-medium">{{ warmupSummary.totalRemainingToday }}</span> emails
-              </p>
-            </div>
-            <button
-              @click="loadWarmupStatus"
-              :disabled="warmupLoading"
-              class="btn btn-ghost"
-            >
-              {{ warmupLoading ? 'Loading...' : 'Refresh Status' }}
-            </button>
-          </div>
+
+          <div class="bg-paper border border-grid-light p-8">
+            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Warmup Management</h3>
+            <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+              Manage domain warmup schedules to safely increase sending capacity. Warmup protects your domain reputation by gradually increasing limits while monitoring bounce and complaint rates.
+            </p>
+            
+            <div class="space-y-4">
+              <div class="flex items-center justify-between mb-4">
+                <div>
+                  <p class="text-sm font-medium text-ink-900">
+                    Domains in Warmup: <span class="text-blue-600">{{ warmupSummary.domainsInWarmup }}</span> / {{ warmupSummary.totalDomains }}
+                  </p>
+                  <p class="text-xs text-ink-600 mt-1">
+                    Total Remaining Today: <span class="font-medium">{{ warmupSummary.totalRemainingToday }}</span> emails
+                  </p>
+                </div>
+                <button
+                  @click="loadWarmupStatus"
+                  :disabled="warmupLoading"
+                  class="btn btn-ghost"
+                >
+                  {{ warmupLoading ? 'Loading...' : 'Refresh Status' }}
+                </button>
+              </div>
 
           <div v-if="warmupLoading" class="p-4 border border-grid-light text-center">
             <p class="text-sm text-ink-600">Loading warmup schedules...</p>
@@ -778,10 +1018,15 @@
             </div>
           </div>
         </div>
+          </div>
+        </div>
       </div>
+    </div>
+  </div>
 
-      <!-- Increase Limit Modal -->
-      <div v-if="showIncreaseModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+  <!-- Modals (outside main container) -->
+  <!-- Increase Limit Modal -->
+    <div v-if="showIncreaseModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div class="bg-white p-8 max-w-md w-full mx-4">
           <h3 class="text-lg font-medium text-ink-900 mb-4">Increase Warmup Limit</h3>
           <p class="text-sm text-ink-600 mb-4">
@@ -817,12 +1062,11 @@
                 Cancel
               </button>
             </div>
-          </div>
-        </div>
       </div>
+    </div>
 
-      <!-- Temporary Increase Modal -->
-      <div v-if="showTemporaryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <!-- Temporary Increase Modal -->
+    <div v-if="showTemporaryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div class="bg-white p-8 max-w-md w-full mx-4">
           <h3 class="text-lg font-medium text-ink-900 mb-4">Temporary Warmup Increase</h3>
           <p class="text-sm text-ink-600 mb-4">
@@ -875,7 +1119,13 @@
         </div>
       </div>
 
-      <div class="bg-paper border border-grid-light p-8">
+      <!-- SECTION 3: EMAIL CONTENT -->
+      <div>
+        <h2 class="text-lg font-normal text-ink-900 mb-6">Email Content</h2>
+        <p class="text-sm text-ink-600 mb-6">Customize email footers and compliance settings.</p>
+        
+        <div class="space-y-6">
+          <div class="bg-paper border border-grid-light p-8">
         <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Footer Settings</h2>
         <p class="text-sm text-ink-600 mb-8 leading-relaxed">
           Customize the unsubscribe footer that is automatically added to all campaign and automation emails. This footer is required for compliance with email regulations (CAN-SPAM, GDPR, CASL).
@@ -916,13 +1166,111 @@
 
           <button type="submit" class="btn btn-primary w-full sm:w-auto">Save Footer Settings</button>
         </form>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modals (outside main container) -->
+    <!-- Increase Limit Modal -->
+    <div v-if="showIncreaseModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div class="bg-white p-8 max-w-md w-full mx-4">
+        <h3 class="text-lg font-medium text-ink-900 mb-4">Increase Warmup Limit</h3>
+        <p class="text-sm text-ink-600 mb-4">
+          Set a new daily limit for <strong>{{ increaseModalSchedule?.domain }}</strong> ({{ increaseModalSchedule?.provider }}).
+          Warmup monitoring will remain active.
+        </p>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+              Daily Limit (0-2000)
+            </label>
+            <input
+              v-model.number="increaseLimitValue"
+              type="number"
+              min="0"
+              max="2000"
+              class="input w-full"
+              placeholder="e.g., 500"
+            />
+          </div>
+          <div class="flex space-x-3">
+            <button
+              @click="applyIncreaseLimit"
+              :disabled="warmupActionLoading || !increaseLimitValue || increaseLimitValue < 0 || increaseLimitValue > 2000"
+              class="btn btn-primary flex-1"
+            >
+              {{ warmupActionLoading ? 'Applying...' : 'Apply' }}
+            </button>
+            <button
+              @click="showIncreaseModal = false"
+              class="btn btn-ghost flex-1"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Temporary Increase Modal -->
+    <div v-if="showTemporaryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div class="bg-white p-8 max-w-md w-full mx-4">
+        <h3 class="text-lg font-medium text-ink-900 mb-4">Temporary Warmup Increase</h3>
+        <p class="text-sm text-ink-600 mb-4">
+          Set a temporary higher limit for <strong>{{ temporaryModalSchedule?.domain }}</strong> ({{ temporaryModalSchedule?.provider }}).
+          The limit will automatically revert after the specified days.
+        </p>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+              Daily Limit (0-2000)
+            </label>
+            <input
+              v-model.number="temporaryLimitValue"
+              type="number"
+              min="0"
+              max="2000"
+              class="input w-full"
+              placeholder="e.g., 500"
+            />
+          </div>
+          <div>
+            <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
+              Revert After (days, 1-30)
+            </label>
+            <input
+              v-model.number="temporaryDaysValue"
+              type="number"
+              min="1"
+              max="30"
+              class="input w-full"
+              placeholder="7"
+            />
+          </div>
+          <div class="flex space-x-3">
+            <button
+              @click="applyTemporaryIncrease"
+              :disabled="warmupActionLoading || !temporaryLimitValue || !temporaryDaysValue"
+              class="btn btn-primary flex-1"
+            >
+              {{ warmupActionLoading ? 'Applying...' : 'Apply' }}
+            </button>
+            <button
+              @click="showTemporaryModal = false"
+              class="btn btn-ghost flex-1"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import api from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 
@@ -972,6 +1320,29 @@ const temporaryModalSchedule = ref<any>(null)
 const increaseLimitValue = ref<number>(500)
 const temporaryLimitValue = ref<number>(500)
 const temporaryDaysValue = ref<number>(7)
+
+// Campaign Email Status
+const campaigns = ref<any[]>([])
+const campaignsLoading = ref(false)
+const selectedCampaignId = ref<number | null>(null)
+const campaignEmailStatus = ref<{
+  emails: any[]
+  total: number
+  limit: number
+  offset: number
+  statusCounts: Record<string, number>
+}>({
+  emails: [],
+  total: 0,
+  limit: 50,
+  offset: 0,
+  statusCounts: {},
+})
+const campaignEmailsLoading = ref(false)
+const campaignEmailError = ref<string | null>(null)
+const campaignEmailFilter = ref<string>('')
+const campaignEmailOffset = ref<number>(0)
+const recoveringEmails = ref(false)
 const sendingDiagnostics = ref<any>(null)
 const diagnosticsLoading = ref(false)
 
@@ -1354,6 +1725,172 @@ async function completeWarmup(domain: string, provider: string) {
   }
 }
 
+// Campaign Email Status Functions
+async function loadCampaigns() {
+  try {
+    campaignsLoading.value = true
+    const response = await api.get('/campaigns', {
+      params: {
+        limit: 100,
+        page: 1,
+      },
+    })
+    campaigns.value = response.data.campaigns || []
+  } catch (error: any) {
+    console.error('Failed to load campaigns:', error)
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to load campaigns'
+    alert(`Error: ${errorMessage}`)
+    campaigns.value = []
+  } finally {
+    campaignsLoading.value = false
+  }
+}
+
+async function onCampaignChange() {
+  if (!selectedCampaignId.value) {
+    campaignEmailStatus.value = {
+      emails: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+      statusCounts: {},
+    }
+    campaignEmailFilter.value = ''
+    campaignEmailOffset.value = 0
+    return
+  }
+  campaignEmailOffset.value = 0
+  campaignEmailFilter.value = ''
+  await loadCampaignEmails()
+}
+
+async function loadCampaignEmails() {
+  if (!selectedCampaignId.value) return
+
+  try {
+    campaignEmailsLoading.value = true
+    campaignEmailError.value = null
+    
+    const params: any = {
+      limit: campaignEmailStatus.value.limit,
+      offset: campaignEmailOffset.value,
+    }
+    
+    if (campaignEmailFilter.value) {
+      params.status = campaignEmailFilter.value
+    }
+    
+    const response = await api.get(`/campaigns/${selectedCampaignId.value}/emails`, { params })
+    
+    campaignEmailStatus.value = {
+      emails: response.data.emails || [],
+      total: response.data.total || 0,
+      limit: response.data.limit || 50,
+      offset: response.data.offset || 0,
+      statusCounts: response.data.statusCounts || {},
+    }
+  } catch (error: any) {
+    console.error('Failed to load campaign emails:', error)
+    campaignEmailError.value = error.response?.data?.message || error.message || 'Failed to load campaign emails'
+    campaignEmailStatus.value = {
+      emails: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+      statusCounts: {},
+    }
+  } finally {
+    campaignEmailsLoading.value = false
+  }
+}
+
+function setStatusFilter(status: string) {
+  campaignEmailFilter.value = status
+  campaignEmailOffset.value = 0
+  loadCampaignEmails()
+}
+
+function previousPage() {
+  if (campaignEmailOffset.value > 0) {
+    campaignEmailOffset.value = Math.max(0, campaignEmailOffset.value - campaignEmailStatus.value.limit)
+    loadCampaignEmails()
+  }
+}
+
+function nextPage() {
+  if (campaignEmailOffset.value + campaignEmailStatus.value.limit < campaignEmailStatus.value.total) {
+    campaignEmailOffset.value += campaignEmailStatus.value.limit
+    loadCampaignEmails()
+  }
+}
+
+async function recoverCampaignEmails() {
+  if (!selectedCampaignId.value) return
+  
+  const failedCount = campaignEmailStatus.value.statusCounts.failed || 0
+  if (failedCount === 0) {
+    alert('No failed emails to recover.')
+    return
+  }
+  
+  if (!confirm(`Are you sure you want to recover ${failedCount} failed email(s)? This will re-queue them for sending.`)) {
+    return
+  }
+  
+  try {
+    recoveringEmails.value = true
+    const response = await api.post(`/campaigns/${selectedCampaignId.value}/recover`)
+    
+    const recovered = response.data.recovered || 0
+    const errors = response.data.errors || []
+    
+    if (errors.length > 0) {
+      alert(`Recovered ${recovered} email(s). Some errors occurred:\n${errors.join('\n')}`)
+    } else {
+      alert(`Successfully recovered ${recovered} email(s). They will be re-queued for sending.`)
+    }
+    
+    // Reload email status
+    await loadCampaignEmails()
+  } catch (error: any) {
+    console.error('Failed to recover campaign emails:', error)
+    const errorMessage = error.response?.data?.message || error.message || 'Failed to recover campaign emails'
+    alert(`Error: ${errorMessage}`)
+  } finally {
+    recoveringEmails.value = false
+  }
+}
+
+function getEmailStatusClass(status: string): string {
+  const statusClasses: Record<string, string> = {
+    sent: 'bg-green-50 border-green-200',
+    failed: 'bg-red-50 border-red-200',
+    pending: 'bg-yellow-50 border-yellow-200',
+    queued: 'bg-blue-50 border-blue-200',
+    sending: 'bg-purple-50 border-purple-200',
+    bounced: 'bg-orange-50 border-orange-200',
+    complained: 'bg-pink-50 border-pink-200',
+  }
+  return statusClasses[status] || 'bg-white'
+}
+
+function getEmailStatusBadgeClass(status: string): string {
+  const badgeClasses: Record<string, string> = {
+    sent: 'bg-green-100 text-green-800',
+    failed: 'bg-red-100 text-red-800',
+    pending: 'bg-yellow-100 text-yellow-800',
+    queued: 'bg-blue-100 text-blue-800',
+    sending: 'bg-purple-100 text-purple-800',
+    bounced: 'bg-orange-100 text-orange-800',
+    complained: 'bg-pink-100 text-pink-800',
+  }
+  return badgeClasses[status] || 'bg-ink-100 text-ink-800'
+}
+
+const hasFailedEmails = computed(() => {
+  return (campaignEmailStatus.value.statusCounts.failed || 0) > 0
+})
+
 onMounted(() => {
   loadProviders()
   loadFooterSettings()
@@ -1361,6 +1898,7 @@ onMounted(() => {
   loadFailedJobs()
   loadWarmupStatus()
   loadSendingDiagnostics()
+  loadCampaigns()
 })
 </script>
 
