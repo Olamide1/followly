@@ -176,6 +176,69 @@ router.post('/:id/recover', async (req: AuthRequest, res: Response, next: NextFu
   }
 });
 
+// Reset stuck campaign (manual recovery for campaigns stuck in "sending" state)
+router.post('/:id/reset', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!;
+    const campaignId = parseInt(req.params.id);
+    const { pool } = await import('../database/connection');
+    
+    // Verify campaign belongs to user
+    const campaign = await pool.query(
+      'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
+      [campaignId, userId]
+    );
+    
+    if (campaign.rows.length === 0) {
+      res.status(404).json({ error: 'Campaign not found' });
+      return;
+    }
+    
+    const campaignData = campaign.rows[0];
+    
+    // Only reset if campaign is stuck in "sending" state
+    if (campaignData.status !== 'sending') {
+      res.status(400).json({ 
+        error: `Campaign is not stuck. Current status: ${campaignData.status}` 
+      });
+      return;
+    }
+    
+    // Check if there are actually emails queued
+    const emailCheck = await pool.query(
+      `SELECT COUNT(*) as count FROM email_queue 
+       WHERE campaign_id = $1 AND status IN ('pending', 'queued', 'sending')`,
+      [campaignId]
+    );
+    const pendingCount = parseInt(emailCheck.rows[0]?.count || '0');
+    
+    if (pendingCount > 0) {
+      res.status(400).json({ 
+        error: `Campaign is actively sending. ${pendingCount} emails are queued.` 
+      });
+      return;
+    }
+    
+    // Reset campaign to draft
+    await pool.query(
+      'UPDATE campaigns SET status = $1 WHERE id = $2',
+      ['draft', campaignId]
+    );
+    
+    console.log(`[Campaign Reset] Manually reset campaign ${campaignId} (${campaignData.name}) for user ${userId}`);
+    
+    res.json({ 
+      success: true,
+      message: 'Campaign reset to draft. You can now send it again.',
+      campaignId,
+      previousStatus: 'sending',
+      newStatus: 'draft'
+    });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
 // Send test email
 router.post('/test-send', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {

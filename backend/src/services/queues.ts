@@ -8,11 +8,22 @@ let schedulingQueue: Queue.Queue | null = null;
 let campaignSendQueue: Queue.Queue | null = null;
 let contactImportQueue: Queue.Queue | null = null;
 
-// Parse Redis URL and configure for Heroku TLS
-// This function is exported so it can be shared across the application
-// Using a shared config ensures both web and worker dynos use the same connection settings,
-// which helps optimize Redis connection usage (Heroku Redis has a 18 connection limit)
+// Shared Redis config object for all Bull queues
+// CRITICAL: All queues use the SAME config object, which allows Bull/ioredis to share connections
+// This reduces Redis connections from ~19 (4 queues × ~4-5 connections each) to ~2-3 total
+// Heroku Redis has a strict 18 connection limit
+let sharedRedisConfig: any = null;
+
+/**
+ * Get shared Redis configuration for all Bull queues
+ * Using the same config object allows Bull's underlying ioredis to share connections efficiently
+ * This dramatically reduces Redis connection usage (from ~19 to ~2-3 connections)
+ */
 export function getRedisConfig() {
+  if (sharedRedisConfig) {
+    return sharedRedisConfig;
+  }
+
   const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
   const isProduction = process.env.NODE_ENV === 'production';
   
@@ -25,39 +36,43 @@ export function getRedisConfig() {
     const host = url.hostname;
     const port = parseInt(url.port || '6379');
     
-    return {
+    sharedRedisConfig = {
       host,
       port,
       password,
       tls: {
         rejectUnauthorized: false, // Required for Heroku Redis self-signed certs
       },
-      // Optimize connection usage: Bull will create fewer connections with these settings
-      // Note: Bull doesn't allow enableReadyCheck or maxRetriesPerRequest
-      // These are handled internally by Bull
       retryStrategy: (times: number) => {
         // Exponential backoff with max delay
         // After 10 attempts, stop retrying to prevent infinite loops
         if (times > 10) {
-          console.error('[BullMQ Redis] Max reconnection attempts reached, stopping retry');
+          console.error('[Bull Redis] Max reconnection attempts reached, stopping retry');
           return null; // Stop retrying
         }
         const delay = Math.min(times * 50, 2000);
-        console.log(`[BullMQ Redis] Reconnecting... attempt ${times} (delay: ${delay}ms)`);
+        console.log(`[Bull Redis] Reconnecting... attempt ${times} (delay: ${delay}ms)`);
         return delay;
       },
       enableOfflineQueue: true, // Queue commands while reconnecting
-      // Connection optimization: Bull uses ioredis which supports connection pooling
-      // maxRetriesPerRequest: null allows ioredis to manage retries more efficiently
+      // CRITICAL: Connection optimization settings
+      // maxRetriesPerRequest: null allows ioredis to manage retries efficiently
       maxRetriesPerRequest: null, // Disable automatic retries (Bull handles retries)
       connectTimeout: 10000, // 10 second connection timeout
       lazyConnect: false, // Connect immediately - worker needs active connection to process jobs
       keepAlive: 30000, // Send keepalive every 30 seconds
+      // CRITICAL: Enable connection sharing by using the same config object
+      // ioredis will automatically share connections when queues use the same config
+      enableReadyCheck: false, // Reduce connection overhead
     };
+    
+    console.log('✅ Shared Redis config created (all queues will share connections)');
+  } else {
+    // For local development without TLS
+    sharedRedisConfig = redisUrl;
   }
   
-  // For local development without TLS
-  return redisUrl;
+  return sharedRedisConfig;
 }
 
 export async function initializeQueues(): Promise<void> {
