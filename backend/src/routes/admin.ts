@@ -107,6 +107,19 @@ router.get('/emails/pending', async (req: AuthRequest, res: Response, next: Next
       [userId]
     );
     
+    // Also check for campaigns that are in "sending" status
+    const campaignsResult = await pool.query(
+      `SELECT 
+        id,
+        name,
+        status,
+        created_at
+       FROM campaigns
+       WHERE user_id = $1 AND status = 'sending'
+       ORDER BY created_at DESC`,
+      [userId]
+    );
+    
     const counts: Record<string, number> = {};
     result.rows.forEach((row: any) => {
       counts[row.status] = parseInt(row.count);
@@ -120,6 +133,12 @@ router.get('/emails/pending', async (req: AuthRequest, res: Response, next: Next
       sending: counts.sending || 0,
       totalPending,
       hasPendingEmails: totalPending > 0,
+      campaignsSending: campaignsResult.rows.map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        status: row.status,
+        createdAt: row.created_at,
+      })),
     });
   } catch (error: any) {
     next(error);

@@ -367,8 +367,33 @@ export class CampaignService {
   async sendCampaign(userId: number, campaignId: number) {
     const campaign = await this.getCampaign(userId, campaignId);
 
-    if (campaign.status === 'sending' || campaign.status === 'sent') {
-      throw createError('Campaign already sent or sending', 400);
+    // If campaign is already sent, don't proceed
+    if (campaign.status === 'sent') {
+      throw createError('Campaign already sent', 400);
+    }
+
+    // If campaign is already "sending", check if emails were actually queued
+    // This handles cases where status was set but job failed before queuing emails
+    if (campaign.status === 'sending') {
+      const emailCheck = await pool.query(
+        `SELECT COUNT(*) as count FROM email_queue 
+         WHERE campaign_id = $1 AND status IN ('pending', 'queued', 'sending')`,
+        [campaignId]
+      );
+      const pendingCount = parseInt(emailCheck.rows[0]?.count || '0');
+      
+      if (pendingCount > 0) {
+        // Emails are queued, campaign is actually sending - don't duplicate
+        throw createError('Campaign already sending', 400);
+      }
+      
+      // No emails queued but status is "sending" - this is a stuck state
+      // Reset to draft and proceed with sending
+      console.log(`[Campaign Send] Campaign ${campaignId} was stuck in "sending" state, resetting and retrying`);
+      await pool.query(
+        'UPDATE campaigns SET status = $1 WHERE id = $2',
+        ['draft', campaignId]
+      );
     }
 
     // Validate list_id

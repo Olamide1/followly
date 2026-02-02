@@ -486,7 +486,7 @@ function startReputationCalculation(): void {
       // Get all unique user_id and domain combinations
       const domainsResult = await pool.query(
         `SELECT DISTINCT user_id, 
-         SUBSTRING(from_email FROM '@(.*)$') as domain
+         SUBSTRING(from_email FROM '@(.*)$')::text as domain
          FROM provider_configs 
          WHERE is_active = true AND from_email IS NOT NULL`
       );

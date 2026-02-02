@@ -110,7 +110,7 @@ export class DomainReputationService {
     try {
       // Get all email events for this domain in the last 30 days
       const eventsResult = await pool.query(
-      `SELECT 
+        `SELECT 
         COUNT(DISTINCT CASE WHEN eq.status = 'sent' THEN eq.id END) as total_sent,
         COUNT(DISTINCT CASE WHEN e.event_type = 'bounced' THEN e.email_queue_id END) as total_bounced,
         COUNT(DISTINCT CASE WHEN e.event_type = 'complained' THEN e.email_queue_id END) as total_complained,
@@ -119,7 +119,7 @@ export class DomainReputationService {
        FROM email_queue eq
        LEFT JOIN email_events e ON e.email_queue_id = eq.id
        WHERE eq.user_id = $1 
-         AND eq.from_email LIKE $2
+         AND eq.from_email LIKE $2::text
          AND eq.created_at >= NOW() - INTERVAL '30 days'`,
         [userId, `%@${normalizedDomain}`]
       );
