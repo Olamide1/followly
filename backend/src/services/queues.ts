@@ -306,6 +306,20 @@ export async function initializeQueues(): Promise<void> {
 
     // Add error handlers for better debugging
     emailQueue.on('error', (error) => {
+      // Filter out expected "Missing lock" errors that occur during rate limiting
+      // These are handled gracefully by safelyDelayJob and don't indicate a real problem
+      const errorMessage = error?.message || String(error);
+      const isExpectedLockError = errorMessage.includes('Missing lock') && 
+                                  (errorMessage.includes('delayed') || errorMessage.includes('failed'));
+      
+      if (isExpectedLockError) {
+        // Log at warn level since this is expected behavior during rate limiting
+        // The job processing logic handles this gracefully
+        console.warn(`[Email Queue] Expected lock error during rate limiting (handled gracefully):`, errorMessage);
+        return;
+      }
+      
+      // Log all other errors normally
       console.error('Email queue error:', error);
     });
     
