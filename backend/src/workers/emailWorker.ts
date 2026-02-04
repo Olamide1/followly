@@ -478,6 +478,10 @@ export async function processEmailQueue(job: Job) {
   // Declare variables outside try block so they're available in catch block
   let finalEmailQueueId: number | undefined = emailQueueId;
   let routingDecision: { provider: ProviderType; reason: string } | null = null;
+  
+  // CRITICAL: Extract domain from ORIGINAL "from" email BEFORE rotation
+  // All protections (warmup, rate limits, circuit breakers, domain reputation) are domain-based
+  // This ensures protections apply correctly even when "from" email is rotated
   const domain = fromEmail.split('@')[1] || '';
 
   try {
@@ -778,13 +782,43 @@ export async function processEmailQueue(job: Job) {
       console.warn(`[Tracking] WARNING: No emailQueueId available for tracking - email to ${toEmail} will not be tracked!`);
     }
 
-    // Send email with tracked content
+    // AUTOMATIC FROM EMAIL ROTATION: Rotate "from" email for better deliverability
+    // User configures one "from" email, system automatically rotates between variants
+    // This distributes load and prevents any single address from hitting limits
+    // 
+    // IMPORTANT: Rotation happens AFTER all protections are checked (circuit breaker, warmup, rate limits)
+    // All protections use the domain extracted from the ORIGINAL "from" email (line 481)
+    // Rotated "from" emails use the SAME domain, so protections still apply correctly
+    // Example: noreply@support.domain.com → hello@support.domain.com (same domain, different local part)
+    let rotatedFromEmail = fromEmail;
+    try {
+      const { FromEmailRotationService } = await import('../services/fromEmailRotation');
+      const fromEmailRotationService = new FromEmailRotationService();
+      // Pass domain to ensure rotation maintains domain consistency (all variants use same domain)
+      rotatedFromEmail = await fromEmailRotationService.getFromEmail(fromEmail, domain);
+      
+      // Update email_queue record with rotated "from" email for tracking
+      if (finalEmailQueueId && rotatedFromEmail !== fromEmail) {
+        await pool.query(
+          `UPDATE email_queue SET from_email = $1 WHERE id = $2`,
+          [rotatedFromEmail, finalEmailQueueId]
+        );
+      }
+    } catch (rotationError: any) {
+      // If rotation fails, use original "from" email (fail gracefully)
+      console.warn(
+        `[FromEmailRotation] Failed to rotate from email for ${fromEmail}, using original:`,
+        rotationError?.message || rotationError
+      );
+    }
+
+    // Send email with tracked content and rotated "from" email
     // Wrap in timeout to prevent indefinite hangs on slow/unresponsive SMTP servers
     const sendEmailPromise = emailProvider.sendEmail({
       to: toEmail,
       subject,
       htmlContent: trackedContent,
-      fromEmail,
+      fromEmail: rotatedFromEmail, // Use rotated "from" email
       fromName,
     });
     

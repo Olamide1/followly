@@ -468,11 +468,32 @@ export class CampaignService {
             }
           );
 
+          // AUTOMATIC FROM EMAIL ROTATION: Rotate "from" email for better deliverability
+          // User configures one "from" email, system automatically rotates between variants
+          // 
+          // IMPORTANT: Domain is extracted BEFORE rotation to ensure all protections apply correctly
+          // All protections (warmup, rate limits, circuit breakers) are domain-based, not "from" email-based
+          // Rotated emails use the SAME domain, so protections still apply
+          const domain = fromEmail.split('@')[1] || '';
+          let rotatedFromEmail = fromEmail;
+          try {
+            const { FromEmailRotationService } = await import('./fromEmailRotation');
+            const fromEmailRotationService = new FromEmailRotationService();
+            // Pass domain to ensure rotation maintains domain consistency
+            rotatedFromEmail = await fromEmailRotationService.getFromEmail(fromEmail, domain);
+          } catch (rotationError: any) {
+            // If rotation fails, use original "from" email (fail gracefully)
+            console.warn(
+              `[FromEmailRotation] Failed to rotate from email for campaign ${campaignId}, using original:`,
+              rotationError?.message || rotationError
+            );
+          }
+
           // Determine send time (spread out)
           const sendDelay = Math.floor(Math.random() * 3600); // Random delay up to 1 hour
           const scheduledAt = new Date(Date.now() + sendDelay * 1000);
 
-          // Create email_queue record upfront for tracking
+          // Create email_queue record upfront for tracking (with rotated "from" email)
           const emailQueueResult = await pool.query(
             `INSERT INTO email_queue 
              (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
@@ -485,7 +506,7 @@ export class CampaignService {
               contact.email,
               personalizedSubject,
               personalizedContent,
-              fromEmail,
+              rotatedFromEmail, // Use rotated "from" email
               campaign.from_name || process.env.DEFAULT_FROM_NAME,
               'queued',
               scheduledAt,
@@ -493,7 +514,7 @@ export class CampaignService {
           );
           const emailQueueId = emailQueueResult.rows[0].id;
 
-          // Add to Bull queue with email_queue_id for reference
+          // Add to Bull queue with email_queue_id for reference (with rotated "from" email)
           await emailQueue.add({
             userId,
             contactId: contact.id,
@@ -502,7 +523,7 @@ export class CampaignService {
             toEmail: contact.email,
             subject: personalizedSubject,
             content: personalizedContent,
-            fromEmail,
+            fromEmail: rotatedFromEmail, // Use rotated "from" email
             fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
             scheduledAt: scheduledAt.toISOString(),
           }, {
@@ -859,7 +880,22 @@ export class CampaignService {
         
         const scheduledAt = new Date(Date.now() + cumulativeDelay);
 
-        // Create email_queue record
+        // AUTOMATIC FROM EMAIL ROTATION: Rotate "from" email for better deliverability
+        // User configures one "from" email, system automatically rotates between variants
+        let rotatedFromEmail = fromEmail;
+        try {
+          const { FromEmailRotationService } = await import('./fromEmailRotation');
+          const fromEmailRotationService = new FromEmailRotationService();
+          rotatedFromEmail = await fromEmailRotationService.getFromEmail(fromEmail, domain);
+        } catch (rotationError: any) {
+          // If rotation fails, use original "from" email (fail gracefully)
+          console.warn(
+            `[FromEmailRotation] Failed to rotate from email for campaign recovery ${campaignId}, using original:`,
+            rotationError?.message || rotationError
+          );
+        }
+
+        // Create email_queue record (with rotated "from" email)
         const emailQueueResult = await pool.query(
           `INSERT INTO email_queue 
            (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
@@ -872,7 +908,7 @@ export class CampaignService {
             contact.email,
             personalizedSubject,
             personalizedContent,
-            fromEmail,
+            rotatedFromEmail, // Use rotated "from" email
             campaign.from_name || process.env.DEFAULT_FROM_NAME,
             'queued',
             scheduledAt,
@@ -880,7 +916,7 @@ export class CampaignService {
         );
         const emailQueueId = emailQueueResult.rows[0].id;
 
-        // Add to Bull queue with delay to respect rate limits
+        // Add to Bull queue with delay to respect rate limits (with rotated "from" email)
         await emailQueue.add({
           userId,
           contactId: contact.id,
@@ -889,11 +925,11 @@ export class CampaignService {
           toEmail: contact.email,
           subject: personalizedSubject,
           content: personalizedContent,
-          fromEmail,
+          fromEmail: rotatedFromEmail, // Use rotated "from" email
           fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
           scheduledAt: scheduledAt.toISOString(),
-        }, {
-          delay: emailDelay,
+          }, {
+            delay: emailDelay,
           jobId: `email-${emailQueueId}`,
         });
 

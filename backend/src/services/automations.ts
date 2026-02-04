@@ -392,7 +392,24 @@ export class AutomationService {
 
     const scheduledAt = new Date();
 
-    // Create email_queue record upfront for tracking
+    // AUTOMATIC FROM EMAIL ROTATION: Rotate "from" email for better deliverability
+    // User configures one "from" email, system automatically rotates between variants
+    const baseFromEmail = config.from_email || process.env.DEFAULT_FROM_EMAIL || '';
+    let rotatedFromEmail = baseFromEmail;
+    try {
+      const { FromEmailRotationService } = await import('./fromEmailRotation');
+      const fromEmailRotationService = new FromEmailRotationService();
+      const domain = baseFromEmail.split('@')[1] || '';
+      rotatedFromEmail = await fromEmailRotationService.getFromEmail(baseFromEmail, domain);
+    } catch (rotationError: any) {
+      // If rotation fails, use original "from" email (fail gracefully)
+      console.warn(
+        `[FromEmailRotation] Failed to rotate from email for automation ${automationId}, using original:`,
+        rotationError?.message || rotationError
+      );
+    }
+
+    // Create email_queue record upfront for tracking (with rotated "from" email)
     const emailQueueResult = await pool.query(
       `INSERT INTO email_queue 
        (user_id, contact_id, automation_id, automation_step_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
@@ -406,7 +423,7 @@ export class AutomationService {
         contact.email,
         subject,
         content,
-        config.from_email || process.env.DEFAULT_FROM_EMAIL,
+        rotatedFromEmail, // Use rotated "from" email
         config.from_name || process.env.DEFAULT_FROM_NAME,
         'queued',
         scheduledAt,
@@ -414,7 +431,7 @@ export class AutomationService {
     );
     const emailQueueId = emailQueueResult.rows[0].id;
 
-    // Add to Bull queue
+    // Add to Bull queue (with rotated "from" email)
     const emailQueue = (await import('./queues')).getEmailQueue();
     await emailQueue.add({
       userId,
@@ -425,7 +442,7 @@ export class AutomationService {
       toEmail: contact.email,
       subject,
       content,
-      fromEmail: config.from_email || process.env.DEFAULT_FROM_EMAIL,
+      fromEmail: rotatedFromEmail, // Use rotated "from" email
       fromName: config.from_name || process.env.DEFAULT_FROM_NAME,
       scheduledAt: scheduledAt.toISOString(),
     }, {
