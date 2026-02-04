@@ -107,14 +107,24 @@ export class NodemailerProvider {
                               errorMessageLower.includes('account has been locked') ||
                               errorMessageLower.includes('account locked');
       
-      const isDomainExceeded = errorResponseLower.includes('domain') && 
-                                (errorResponseLower.includes('exceeded') ||
-                                 errorResponseLower.includes('max defers') ||
-                                 errorResponseLower.includes('max failures')) ||
-                                errorMessageLower.includes('domain') && 
-                                (errorMessageLower.includes('exceeded') ||
-                                 errorMessageLower.includes('max defers') ||
-                                 errorMessageLower.includes('max failures'));
+      // Detect "domain exceeded failures" errors - these are critical warnings
+      // cPanel format: "Domain X has exceeded the max defers and failures per hour (5/5 (100%)) allowed. Message discarded."
+      const isDomainExceeded = 
+        // Check error.response (SMTP response)
+        (errorResponseLower.includes('domain') && 
+         (errorResponseLower.includes('exceeded') ||
+          errorResponseLower.includes('max defers') ||
+          errorResponseLower.includes('max failures') ||
+          errorResponseLower.includes('message discarded'))) ||
+        // Check error.message (general error message)
+        (errorMessageLower.includes('domain') && 
+         (errorMessageLower.includes('exceeded') ||
+          errorMessageLower.includes('max defers') ||
+          errorMessageLower.includes('max failures') ||
+          errorMessageLower.includes('message discarded'))) ||
+        // Also check for "message discarded" as standalone indicator
+        errorResponseLower.includes('message discarded') ||
+        errorMessageLower.includes('message discarded');
       
       // Check for rate limit errors in response message
       const isRateLimitError = !isAccountLocked && !isDomainExceeded && (

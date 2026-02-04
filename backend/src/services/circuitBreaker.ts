@@ -143,16 +143,32 @@ export class CircuitBreakerService {
       const failureKey = `circuit_failures:${normalizedDomain}`;
       const circuitKey = `circuit_breaker:${normalizedDomain}`;
       
+      // CRITICAL: "Domain exceeded failures" and "Account locked" errors should trigger IMMEDIATELY (threshold = 1)
+      // These errors mean the mail server has already detected critical issues
+      const isDomainExceededError = reason.toLowerCase().includes('domain has exceeded') ||
+                                    reason.toLowerCase().includes('max defers') ||
+                                    reason.toLowerCase().includes('max failures') ||
+                                    reason.toLowerCase().includes('message discarded');
+      
+      const isAccountLockedError = reason.toLowerCase().includes('account has been locked') ||
+                                   reason.toLowerCase().includes('account locked') ||
+                                   reason.toLowerCase().includes('account is locked');
+      
+      // Use lower threshold (1) for critical errors that are already warnings
+      // Domain exceeded = mail server already detected too many failures
+      // Account locked = account is already locked, no point continuing
+      const threshold = (isDomainExceededError || isAccountLockedError) ? 1 : this.defaultConfig.failureThreshold;
+      
       // Increment failure count
       const failureCount = await redis.incr(failureKey);
       await redis.expire(failureKey, 3600); // Expire after 1 hour
       
       console.warn(
-        `[CircuitBreaker] Critical failure recorded for domain ${domain}: ${reason} (${failureCount}/${this.defaultConfig.failureThreshold})`
+        `[CircuitBreaker] Critical failure recorded for domain ${domain}: ${reason} (${failureCount}/${threshold})`
       );
 
-      // If threshold reached, open circuit
-      if (failureCount >= this.defaultConfig.failureThreshold) {
+      // If threshold reached, open circuit IMMEDIATELY
+      if (failureCount >= threshold) {
         const resetAt = new Date(Date.now() + this.defaultConfig.resetTimeout);
         const circuitData = {
           reason: `Account/domain issue detected: ${reason}. Circuit opened after ${failureCount} consecutive failures.`,
@@ -177,7 +193,8 @@ export class CircuitBreakerService {
   }
 
   /**
-   * Record a successful send (resets failure counts)
+   * Record a successful send (gradually reduces failure counts instead of immediate reset)
+   * This prevents the counter from being reset if there are intermittent failures
    * @param domain The sending domain
    */
   async recordSuccess(domain: string): Promise<void> {
@@ -187,9 +204,32 @@ export class CircuitBreakerService {
       const failureKey = `circuit_failures:${normalizedDomain}`;
       const authFailureKey = `circuit_auth_failures:${normalizedDomain}`;
       
-      // Reset both failure counts on success
-      await redis.del(failureKey);
-      await redis.del(authFailureKey);
+      // Instead of immediately deleting, reduce the count gradually
+      // This prevents reset if there are intermittent failures mixed with successes
+      const currentFailures = parseInt(await redis.get(failureKey) || '0', 10);
+      const currentAuthFailures = parseInt(await redis.get(authFailureKey) || '0', 10);
+      
+      if (currentFailures > 0) {
+        // Reduce by 1 for each success, but don't go below 0
+        const newCount = Math.max(0, currentFailures - 1);
+        if (newCount === 0) {
+          await redis.del(failureKey);
+        } else {
+          await redis.set(failureKey, newCount.toString());
+          await redis.expire(failureKey, 3600);
+        }
+      }
+      
+      if (currentAuthFailures > 0) {
+        // Reduce by 1 for each success
+        const newCount = Math.max(0, currentAuthFailures - 1);
+        if (newCount === 0) {
+          await redis.del(authFailureKey);
+        } else {
+          await redis.set(authFailureKey, newCount.toString());
+          await redis.expire(authFailureKey, 3600);
+        }
+      }
     } catch (error: any) {
       // Don't throw - circuit breaker failures shouldn't block success recording
       console.warn(`[CircuitBreaker] Error recording success for domain ${domain}:`, error?.message || error);
