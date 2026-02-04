@@ -890,12 +890,6 @@
               </div>
             </div>
           </div>
-
-          <div class="bg-paper border border-grid-light p-8">
-            <h3 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Warmup Management</h3>
-            <p class="text-sm text-ink-600 mb-8 leading-relaxed">
-              Manage domain warmup schedules to safely increase sending capacity. Warmup protects your domain reputation by gradually increasing limits while monitoring bounce and complaint rates.
-            </p>
             
             <div class="space-y-4">
               <div class="flex items-center justify-between mb-4">
@@ -1019,105 +1013,8 @@
           </div>
         </div>
           </div>
-        </div>
       </div>
     </div>
-  </div>
-
-  <!-- Modals (outside main container) -->
-  <!-- Increase Limit Modal -->
-    <div v-if="showIncreaseModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div class="bg-white p-8 max-w-md w-full mx-4">
-          <h3 class="text-lg font-medium text-ink-900 mb-4">Increase Warmup Limit</h3>
-          <p class="text-sm text-ink-600 mb-4">
-            Set a new daily limit for <strong>{{ increaseModalSchedule?.domain }}</strong> ({{ increaseModalSchedule?.provider }}).
-            Warmup monitoring will remain active.
-          </p>
-          <div class="space-y-4">
-            <div>
-              <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
-                Daily Limit (0-2000)
-              </label>
-              <input
-                v-model.number="increaseLimitValue"
-                type="number"
-                min="0"
-                max="2000"
-                class="input w-full"
-                placeholder="e.g., 500"
-              />
-            </div>
-            <div class="flex space-x-3">
-              <button
-                @click="applyIncreaseLimit"
-                :disabled="warmupActionLoading || !increaseLimitValue || increaseLimitValue < 0 || increaseLimitValue > 2000"
-                class="btn btn-primary flex-1"
-              >
-                {{ warmupActionLoading ? 'Applying...' : 'Apply' }}
-              </button>
-              <button
-                @click="showIncreaseModal = false"
-                class="btn btn-ghost flex-1"
-              >
-                Cancel
-              </button>
-            </div>
-      </div>
-    </div>
-
-    <!-- Temporary Increase Modal -->
-    <div v-if="showTemporaryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div class="bg-white p-8 max-w-md w-full mx-4">
-          <h3 class="text-lg font-medium text-ink-900 mb-4">Temporary Warmup Increase</h3>
-          <p class="text-sm text-ink-600 mb-4">
-            Set a temporary higher limit for <strong>{{ temporaryModalSchedule?.domain }}</strong> ({{ temporaryModalSchedule?.provider }}).
-            The limit will automatically revert after the specified days.
-          </p>
-          <div class="space-y-4">
-            <div>
-              <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
-                Daily Limit (0-2000)
-              </label>
-              <input
-                v-model.number="temporaryLimitValue"
-                type="number"
-                min="0"
-                max="2000"
-                class="input w-full"
-                placeholder="e.g., 500"
-              />
-            </div>
-            <div>
-              <label class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-2">
-                Revert After (days, 1-30)
-              </label>
-              <input
-                v-model.number="temporaryDaysValue"
-                type="number"
-                min="1"
-                max="30"
-                class="input w-full"
-                placeholder="7"
-              />
-            </div>
-            <div class="flex space-x-3">
-              <button
-                @click="applyTemporaryIncrease"
-                :disabled="warmupActionLoading || !temporaryLimitValue || !temporaryDaysValue"
-                class="btn btn-primary flex-1"
-              >
-                {{ warmupActionLoading ? 'Applying...' : 'Apply' }}
-              </button>
-              <button
-                @click="showTemporaryModal = false"
-                class="btn btn-ghost flex-1"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <!-- SECTION 3: EMAIL CONTENT -->
       <div>
@@ -1126,46 +1023,46 @@
         
         <div class="space-y-6">
           <div class="bg-paper border border-grid-light p-8">
-        <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Footer Settings</h2>
-        <p class="text-sm text-ink-600 mb-8 leading-relaxed">
-          Customize the unsubscribe footer that is automatically added to all campaign and automation emails. This footer is required for compliance with email regulations (CAN-SPAM, GDPR, CASL).
-        </p>
-        
-        <form @submit.prevent="saveFooterSettings" class="space-y-6 sm:space-y-8">
-          <div>
-            <label for="custom_footer_text" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
-              Custom Footer Text
-            </label>
-            <input
-              id="custom_footer_text"
-              v-model="footerForm.custom_footer_text"
-              type="text"
-              placeholder="Don't want to receive these emails?"
-              class="input"
-            />
-            <p class="text-xs text-ink-500 mt-2">
-              This text appears before the unsubscribe link. Leave empty to use the default text.
+            <h2 class="text-sm font-normal text-ink-500 uppercase tracking-wider mb-6">Email Footer Settings</h2>
+            <p class="text-sm text-ink-600 mb-8 leading-relaxed">
+              Customize the unsubscribe footer that is automatically added to all campaign and automation emails. This footer is required for compliance with email regulations (CAN-SPAM, GDPR, CASL).
             </p>
-          </div>
+            
+            <form @submit.prevent="saveFooterSettings" class="space-y-6 sm:space-y-8">
+              <div>
+                <label for="custom_footer_text" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                  Custom Footer Text
+                </label>
+                <input
+                  id="custom_footer_text"
+                  v-model="footerForm.custom_footer_text"
+                  type="text"
+                  placeholder="Don't want to receive these emails?"
+                  class="input"
+                />
+                <p class="text-xs text-ink-500 mt-2">
+                  This text appears before the unsubscribe link. Leave empty to use the default text.
+                </p>
+              </div>
 
-          <div>
-            <label for="company_address" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
-              Company Address
-            </label>
-            <textarea
-              id="company_address"
-              v-model="footerForm.company_address"
-              rows="3"
-              placeholder="123 Your Street, City, State ZIP"
-              class="input"
-            ></textarea>
-            <p class="text-xs text-ink-500 mt-2">
-              Your physical mailing address (required by CAN-SPAM Act). This will appear at the bottom of all emails.
-            </p>
-          </div>
+              <div>
+                <label for="company_address" class="block text-xs font-normal text-ink-500 uppercase tracking-wider mb-3">
+                  Company Address
+                </label>
+                <textarea
+                  id="company_address"
+                  v-model="footerForm.company_address"
+                  rows="3"
+                  placeholder="123 Your Street, City, State ZIP"
+                  class="input"
+                ></textarea>
+                <p class="text-xs text-ink-500 mt-2">
+                  Your physical mailing address (required by CAN-SPAM Act). This will appear at the bottom of all emails.
+                </p>
+              </div>
 
-          <button type="submit" class="btn btn-primary w-full sm:w-auto">Save Footer Settings</button>
-        </form>
+              <button type="submit" class="btn btn-primary w-full sm:w-auto">Save Footer Settings</button>
+            </form>
           </div>
         </div>
       </div>
