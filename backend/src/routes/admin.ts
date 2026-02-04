@@ -327,10 +327,8 @@ router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next:
     const warmupDetails = await Promise.all(
       providers.rows.map(async (row: any) => {
         const schedule = await warmupService.getWarmupSchedule(userId, row.domain, row.provider);
-        const dailyLimit = schedule ? await warmupService.getDailyLimit(userId, row.domain, row.provider) : null;
-        const hourlyLimit = dailyLimit ? Math.max(2, Math.floor(dailyLimit / 12)) : null;
         
-        // Get current rate limit status
+        // Get current rate limit status (always fetch to get dynamic limit)
         let rateLimitStatus = null;
         try {
           rateLimitStatus = await rateLimiterService.canSend(row.domain, {
@@ -339,6 +337,21 @@ router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next:
           });
         } catch (error: any) {
           console.error(`[Diagnostics] Error getting rate limit for ${row.domain}:`, error?.message);
+        }
+        
+        // Calculate limits: use warmup limits if in warmup, otherwise use dynamic rate limit
+        let dailyLimit: number | null = null;
+        let hourlyLimit: number | null = null;
+        
+        if (schedule) {
+          // In warmup: use warmup schedule limits
+          dailyLimit = await warmupService.getDailyLimit(userId, row.domain, row.provider);
+          hourlyLimit = dailyLimit ? Math.max(2, Math.floor(dailyLimit / 12)) : null;
+        } else if (rateLimitStatus && rateLimitStatus.limit > 0) {
+          // Warmup completed: use dynamic rate limit from RateLimiterService
+          hourlyLimit = rateLimitStatus.limit;
+          // Calculate daily limit from hourly (conservative: hourly * 24, but cap at reasonable max)
+          dailyLimit = Math.min(hourlyLimit * 24, 10000); // Cap at 10k/day for display purposes
         }
         
         return {
