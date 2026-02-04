@@ -470,6 +470,9 @@ export async function initializeQueues(): Promise<void> {
 
     // Start periodic check for temporary warmup increases that need to be reverted
     startWarmupTemporaryIncreaseCheck();
+    
+    // Start periodic check for automatic warmup completion
+    startWarmupAutoCompletionCheck();
 
     // Note: Processors are NOT registered here to avoid duplicate registration
     // The worker dyno (workers/index.ts) is responsible for registering processors
@@ -845,6 +848,30 @@ function startWarmupTemporaryIncreaseCheck(): void {
   setInterval(checkAndRevert, CHECK_INTERVAL);
   
   console.log('✅ Warmup temporary increase check scheduled (runs every hour)');
+}
+
+/**
+ * Periodic check for automatic warmup completion
+ * Runs every 6 hours to auto-complete domains that have been in Phase 4 for 7+ days with good metrics
+ */
+function startWarmupAutoCompletionCheck(): void {
+  const CHECK_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+  
+  const checkAndAutoComplete = async () => {
+    try {
+      const { WarmupService } = await import('./warmup');
+      const warmupService = new WarmupService();
+      await warmupService.checkAndAutoCompleteWarmup();
+    } catch (error: any) {
+      console.error('[Warmup] Error checking for auto-completion:', error?.message || error);
+    }
+  };
+  
+  // Run immediately, then every 6 hours
+  checkAndAutoComplete();
+  setInterval(checkAndAutoComplete, CHECK_INTERVAL);
+  
+  console.log('✅ Warmup auto-completion check scheduled (runs every 6 hours)');
 }
 
 export function getEmailQueue() {

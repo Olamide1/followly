@@ -235,6 +235,11 @@ export class WarmupService {
         // Progressive warmup: Phase 2 (200/day), Phase 3 (500/day), Phase 4 (1000/day)
         const dailyLimit = phase === 2 ? 200 : phase === 3 ? 500 : 1000;
         
+        // Track when Phase 4 is reached for auto-completion
+        if (phase === 4) {
+          updatedMetrics.phase4ReachedAt = new Date().toISOString();
+        }
+        
         await pool.query(
           'UPDATE warmup_schedules SET phase = $1, daily_limit = $2, metrics = $3 WHERE id = $4',
           [phase, dailyLimit, JSON.stringify(updatedMetrics), schedule.id]
@@ -402,6 +407,87 @@ export class WarmupService {
       }
       console.error(`[Warmup] Error completing warmup:`, error?.message || error);
       throw new Error(`Failed to complete warmup: ${error?.message || 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Check and automatically complete warmup schedules that meet criteria:
+   * - In Phase 4 (1000/day limit)
+   * - Been in Phase 4 for at least 7 days with good metrics
+   * - Bounce rate < 1% and complaint rate < 0.01%
+   * Runs periodically to auto-complete domains that are ready
+   */
+  async checkAndAutoCompleteWarmup(): Promise<void> {
+    try {
+      const PHASE_4_MIN_DAYS = 7; // Minimum days in Phase 4 before auto-completion
+      const now = new Date();
+      
+      // Get all active schedules in Phase 4
+      const schedules = await pool.query(
+        `SELECT id, user_id, domain, provider, phase, daily_limit, metrics, updated_at, created_at
+         FROM warmup_schedules 
+         WHERE status = 'active' 
+         AND phase = 4
+         AND daily_limit >= 1000`
+      );
+
+      let autoCompleted = 0;
+
+      for (const schedule of schedules.rows) {
+        try {
+          const metrics = schedule.metrics || {};
+          const bounceRate = metrics.bounceRate || 0;
+          const complaintRate = metrics.complaintRate || 0;
+          const phase4ReachedAt = metrics.phase4ReachedAt;
+          
+          // Check if metrics are good
+          const metricsGood = bounceRate < 0.01 && complaintRate < 0.0001;
+          
+          if (!metricsGood) {
+            continue; // Skip if metrics aren't good
+          }
+          
+          // Check if been in Phase 4 long enough
+          let daysInPhase4 = 0;
+          if (phase4ReachedAt) {
+            // Use tracked Phase 4 date if available
+            const phase4Date = new Date(phase4ReachedAt);
+            daysInPhase4 = Math.floor((now.getTime() - phase4Date.getTime()) / (1000 * 60 * 60 * 24));
+          } else {
+            // Fallback: use updated_at if Phase 4 date not tracked (for existing schedules)
+            // This is less accurate but works for schedules created before this feature
+            const updatedAt = new Date(schedule.updated_at);
+            daysInPhase4 = Math.floor((now.getTime() - updatedAt.getTime()) / (1000 * 60 * 60 * 24));
+          }
+          
+          if (daysInPhase4 >= PHASE_4_MIN_DAYS) {
+            // Auto-complete this warmup schedule
+            await pool.query(
+              'UPDATE warmup_schedules SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+              ['completed', schedule.id]
+            );
+            
+            console.log(
+              `[Warmup] ✅ Auto-completed warmup for ${schedule.domain} (${schedule.provider}) ` +
+              `after ${daysInPhase4} days in Phase 4 with good metrics ` +
+              `(bounce: ${(bounceRate * 100).toFixed(2)}%, complaints: ${(complaintRate * 100).toFixed(3)}%)`
+            );
+            autoCompleted++;
+          }
+        } catch (scheduleError: any) {
+          // Log but continue processing other schedules
+          console.error(
+            `[Warmup] Error checking schedule ${schedule.id} (${schedule.domain}):`,
+            scheduleError?.message || scheduleError
+          );
+        }
+      }
+
+      if (autoCompleted > 0) {
+        console.log(`[Warmup] Auto-completed ${autoCompleted} warmup schedule(s)`);
+      }
+    } catch (error: any) {
+      console.error(`[Warmup] Error checking for auto-completion:`, error?.message || error);
     }
   }
 }
