@@ -2,12 +2,13 @@ import { getRedisClient } from './redis';
 
 /**
  * Service to automatically rotate "from" email addresses for better deliverability
- * Takes a single user-configured "from" email and automatically rotates between variants
+ * Takes a single user-configured "from" email and automatically rotates between 15 variants
  * This distributes load across multiple addresses, preventing any single address from hitting limits
  * 
  * Example:
  * - User configures: noreply@support.yourdomain.com
- * - System automatically uses: noreply, hello, info, notifications variants
+ * - System automatically rotates between 15 variants: noreply, hello, info, notifications, updates, team, etc.
+ * - Load balancing ensures even distribution and optimal deliverability
  * - Rotation is transparent to the user
  */
 export class FromEmailRotationService {
@@ -42,12 +43,23 @@ export class FromEmailRotationService {
     
     // Common prefixes for email rotation (same domain, different local parts)
     // IMPORTANT: All variants MUST use the same domain to maintain protection consistency
+    // 15 variants for optimal load distribution and deliverability resilience
     const prefixes = [
-      localPart, // Original (noreply)
-      'hello',   // hello@support.yourdomain.com
-      'info',    // info@support.yourdomain.com
+      localPart,       // Original (e.g., noreply)
+      'hello',         // hello@support.yourdomain.com
+      'info',          // info@support.yourdomain.com
       'notifications', // notifications@support.yourdomain.com
-      'mail',    // mail@support.yourdomain.com
+      'mail',          // mail@support.yourdomain.com
+      'updates',       // updates@support.yourdomain.com - for newsletters/updates
+      'team',          // team@support.yourdomain.com - personal touch
+      'news',          // news@support.yourdomain.com - announcements
+      'contact',       // contact@support.yourdomain.com - general inquiries
+      'support',       // support@support.yourdomain.com - service-related
+      'service',       // service@support.yourdomain.com - alternative to support
+      'alerts',        // alerts@support.yourdomain.com - time-sensitive messages
+      'no-reply',      // no-reply@support.yourdomain.com - variant with hyphen
+      'notify',        // notify@support.yourdomain.com - shorter alternative
+      'mailer',        // mailer@support.yourdomain.com - classic sending address
     ];
 
     // Generate variants, removing duplicates
