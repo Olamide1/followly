@@ -773,9 +773,21 @@
                       </div>
                     </div>
                     
-                    <div v-if="email.error_message" class="mt-3 p-2 bg-red-50 border border-red-200 rounded">
-                      <p class="text-xs font-medium text-red-700 mb-1">Error:</p>
-                      <p class="text-xs text-red-600 font-mono break-words">{{ email.error_message }}</p>
+                    <div v-if="email.error_message" class="mt-3 p-2 rounded"
+                      :class="isThrottleMessage(email.error_message)
+                        ? 'bg-blue-50 border border-blue-200'
+                        : 'bg-red-50 border border-red-200'"
+                    >
+                      <p class="text-xs font-medium mb-1"
+                        :class="isThrottleMessage(email.error_message) ? 'text-blue-700' : 'text-red-700'"
+                      >
+                        {{ isThrottleMessage(email.error_message) ? 'Throttled:' : 'Error:' }}
+                      </p>
+                      <p class="text-xs font-mono break-words"
+                        :class="isThrottleMessage(email.error_message) ? 'text-blue-600' : 'text-red-600'"
+                      >
+                        {{ email.error_message }}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -889,6 +901,25 @@
               </div>
               </div>
             </div>
+
+          <!-- Per-recipient domain throttle status -->
+          <div v-if="sendingDiagnostics.recipientThrottle && sendingDiagnostics.recipientThrottle.length > 0" class="mt-4 pt-4 border-t border-grid-light">
+            <p class="text-xs text-ink-500 uppercase tracking-wider mb-2">Recipient Domain Throttle (this hour)</p>
+            <div class="flex flex-wrap gap-3">
+              <div
+                v-for="rt in sendingDiagnostics.recipientThrottle"
+                :key="rt.domain"
+                class="px-3 py-1.5 rounded text-xs font-mono"
+                :class="rt.sent >= rt.limit ? 'bg-orange-50 border border-orange-200 text-orange-700' : 'bg-blue-50 border border-blue-200 text-blue-700'"
+              >
+                {{ rt.domain }}: {{ rt.sent }}/{{ rt.limit }}
+                <span v-if="rt.sent >= rt.limit" class="ml-1">(paused)</span>
+              </div>
+            </div>
+            <p class="text-xs text-ink-400 mt-2">
+              Emails to each provider are throttled per hour to prevent delivery issues. Limits reset at the top of each hour.
+            </p>
+          </div>
           </div>
             
             <div class="space-y-4">
@@ -1769,6 +1800,17 @@ function getEmailStatusClass(status: string): string {
     complained: 'bg-pink-50 border-pink-200',
   }
   return statusClasses[status] || 'bg-white'
+}
+
+function isThrottleMessage(message: string): boolean {
+  if (!message) return false
+  const lower = message.toLowerCase()
+  return lower.includes('rate limit') ||
+    lower.includes('recipient domain') ||
+    lower.includes('will retry after limit resets') ||
+    lower.includes('delayed:') ||
+    lower.includes('warmup limit reached') ||
+    lower.includes('circuit breaker')
 }
 
 function getEmailStatusBadgeClass(status: string): string {

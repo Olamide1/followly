@@ -418,6 +418,40 @@ router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next:
     
     const sentToday = parseInt(today.rows[0]?.count || '0');
     
+    // Get per-recipient-domain throttle status from Redis
+    // Shows how many emails have been sent to each major recipient domain this hour
+    let recipientDomainThrottle: Array<{ domain: string; sent: number; limit: number }> = [];
+    try {
+      const { getRedisClient } = await import('../services/redis');
+      const redis = getRedisClient();
+      const now = new Date();
+      const hourKey = now.toISOString().split(':')[0];
+
+      // Check common recipient domains for each sender domain
+      const recipientDomains = ['gmail.com', 'googlemail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'live.com', 'aol.com'];
+      const recipientLimits: Record<string, number> = {
+        'gmail.com': 20, 'googlemail.com': 20,
+        'yahoo.com': 25,
+        'outlook.com': 30, 'hotmail.com': 30, 'live.com': 30, 'aol.com': 30,
+      };
+
+      for (const provRow of providers.rows) {
+        for (const recipientDomain of recipientDomains) {
+          const redisKey = `recipient_rate_limit:${provRow.domain}:${recipientDomain}:${hourKey}`;
+          const count = parseInt(await redis.get(redisKey) || '0', 10);
+          if (count > 0) {
+            recipientDomainThrottle.push({
+              domain: recipientDomain,
+              sent: count,
+              limit: recipientLimits[recipientDomain] || 40,
+            });
+          }
+        }
+      }
+    } catch (throttleError: any) {
+      console.warn('[Diagnostics] Error getting recipient domain throttle data:', throttleError?.message);
+    }
+
     res.json({
       warmup: warmupDetails,
       queue: {
@@ -436,6 +470,7 @@ router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next:
         sentToday: sentToday,
         pending: (statusCounts.pending || 0) + (statusCounts.queued || 0) + (statusCounts.sending || 0),
       },
+      recipientThrottle: recipientDomainThrottle,
       summary: {
         canSendMore: warmupDetails.some(d => d.warmup.remainingToday && d.warmup.remainingToday > 0),
         totalRemainingToday: warmupDetails.reduce((sum, d) => sum + (d.warmup.remainingToday || 0), 0),

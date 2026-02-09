@@ -417,10 +417,11 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
                 privateKey: config.dkim_private_key,
               },
             }),
-            // Enable connection pooling for high-volume sending
+            // Connection pooling with conservative settings for cPanel SMTP
+            // Reduced from 5/100 to prevent cPanel from burst-delivering to Gmail
             pool: true,
-            maxConnections: 5,
-            maxMessages: 100,
+            maxConnections: 2,
+            maxMessages: 50,
           };
           
           console.log(`[Nodemailer] Successfully configured provider for user ${userId}`);
@@ -674,6 +675,47 @@ export async function processEmailQueue(job: Job) {
       }
     }
 
+    // Check per-RECIPIENT-domain rate limit (prevents cPanel 421 defers from Gmail/Yahoo/etc.)
+    // cPanel has a 5 defers/hour limit per sending domain. Gmail rejects bursts with 421,
+    // and each rejection counts as a "defer" in cPanel. This throttle prevents those bursts.
+    // Only applies to nodemailer (cPanel/SMTP) - API providers handle their own rate limiting.
+    if (rateLimiterService && routingDecision.provider === 'nodemailer') {
+      const recipientDomain = toEmail.split('@')[1]?.toLowerCase() || '';
+      if (recipientDomain) {
+        const recipientRateLimitCheck = await rateLimiterService.canSendToRecipientDomain(
+          recipientDomain,
+          domain
+        );
+
+        if (!recipientRateLimitCheck.canSend) {
+          const delayMs = recipientRateLimitCheck.timeUntilReset + 60000; // Add 1 minute buffer
+          console.warn(
+            `[RateLimiter] Recipient domain ${recipientDomain} has reached hourly limit ` +
+            `(${recipientRateLimitCheck.currentCount}/${recipientRateLimitCheck.limit}). ` +
+            `Delaying email for ${Math.round(delayMs / 60000)} minutes.`
+          );
+
+          if (finalEmailQueueId) {
+            await pool.query(
+              `UPDATE email_queue
+               SET status = 'queued',
+                   error_message = $1
+               WHERE id = $2`,
+              [
+                `Recipient domain rate limit: ${recipientRateLimitCheck.currentCount}/${recipientRateLimitCheck.limit} emails/hour to ${recipientDomain}. Will retry after limit resets.`,
+                finalEmailQueueId
+              ]
+            );
+          }
+
+          await safelyDelayJob(job, delayMs,
+            `Recipient domain rate limit: ${recipientRateLimitCheck.currentCount}/${recipientRateLimitCheck.limit} to ${recipientDomain}`
+          );
+          return;
+        }
+      }
+    }
+
     // Get provider instance
     const emailProvider = providerService.getProvider(routingDecision.provider);
     if (!emailProvider) {
@@ -836,6 +878,15 @@ export async function processEmailQueue(job: Job) {
       // Clear timeout on error as well
       clearTimeout(timeoutId!);
       throw error;
+    }
+
+    // Inter-email delay: space out sends to prevent cPanel from burst-delivering to Gmail
+    // Without this, cPanel queues messages and delivers them all at once, triggering Gmail 421 errors
+    // Each 421 counts as a "defer" in cPanel, and after 5 defers/hour cPanel blocks the domain
+    // Configurable via INTER_EMAIL_DELAY_MS env var (default: 3 seconds)
+    const INTER_EMAIL_DELAY_MS = parseInt(process.env.INTER_EMAIL_DELAY_MS || '3000', 10);
+    if (INTER_EMAIL_DELAY_MS > 0) {
+      await new Promise(resolve => setTimeout(resolve, INTER_EMAIL_DELAY_MS));
     }
 
     // Record success - finalEmailQueueId is guaranteed to exist at this point

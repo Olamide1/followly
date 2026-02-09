@@ -2,6 +2,25 @@ import { getRedisClient } from './redis';
 import { DomainReputationService } from './domainReputation';
 import { WarmupService } from './warmup';
 
+/**
+ * Per-recipient-domain hourly limits to prevent cPanel 421 defers
+ * cPanel allows only 5 defers/hour per sending domain. When we send many emails
+ * to Gmail too fast, Gmail rejects with 421 (Connection limits exceeded), each
+ * counting as a "defer" in cPanel. These limits prevent that burst.
+ */
+const RECIPIENT_DOMAIN_LIMITS: Record<string, number> = {
+  'gmail.com': 20,
+  'googlemail.com': 20,
+  'yahoo.com': 25,
+  'yahoo.co.uk': 25,
+  'ymail.com': 25,
+  'outlook.com': 30,
+  'hotmail.com': 30,
+  'live.com': 30,
+  'aol.com': 30,
+};
+const DEFAULT_RECIPIENT_DOMAIN_LIMIT = 40;
+
 export interface RateLimitConfig {
   maxEmailsPerHour?: number; // Optional override - will be calculated based on reputation/warmup if not provided
   domain?: string; // Optional: specific domain limit override
@@ -42,7 +61,8 @@ export class RateLimiterService {
       resend: 100, // ESPs have higher limits
       brevo: 100,
       mailjet: 100,
-      nodemailer: 100, // Increased from 60 to 100 - safe for established SMTP servers
+      nodemailer: 50, // Conservative for cPanel SMTP - prevents 421 defers
+      // cPanel allows only 5 defers/hour per domain, so 50/hour reduces burst risk
       // Note: Warmup will still restrict this to daily limit / 12 (2-hour windows)
     };
 
@@ -372,6 +392,84 @@ export class RateLimiterService {
         limit: 60,
         timeUntilReset: 0,
         percentageUsed: 0,
+      };
+    }
+  }
+
+  /**
+   * Check if we can send to a specific recipient domain (e.g., gmail.com)
+   * Prevents bursting emails to Gmail/Yahoo/etc. which causes cPanel 421 defers
+   * Uses the same atomic Lua script as canSend() to prevent race conditions
+   * @param recipientDomain The domain part of the recipient email (e.g., "gmail.com")
+   * @param senderDomain The sending domain (for composite Redis key)
+   * @returns Object with canSend boolean and timing info
+   */
+  async canSendToRecipientDomain(
+    recipientDomain: string,
+    senderDomain: string
+  ): Promise<{ canSend: boolean; timeUntilReset: number; currentCount: number; limit: number }> {
+    try {
+      const normalizedRecipientDomain = recipientDomain.trim().toLowerCase();
+      const normalizedSenderDomain = senderDomain.trim().toLowerCase();
+      const redis = getRedisClient();
+
+      const limit = RECIPIENT_DOMAIN_LIMITS[normalizedRecipientDomain] || DEFAULT_RECIPIENT_DOMAIN_LIMIT;
+
+      const now = new Date();
+      const hourKey = now.toISOString().split(':')[0];
+      const redisKey = `recipient_rate_limit:${normalizedSenderDomain}:${normalizedRecipientDomain}:${hourKey}`;
+
+      // Use atomic Lua script to check and reserve a slot (same pattern as canSend)
+      const script = this.getCheckAndReserveScript();
+      const atomicResult = await this.executeAtomicCheck(redis, script, redisKey, limit);
+
+      if (atomicResult.canSend && atomicResult.currentCount > 0) {
+        try {
+          await redis.expire(redisKey, 7200);
+        } catch (expireError: any) {
+          // Ignore expiration errors
+        }
+      } else if (atomicResult.canSend) {
+        try {
+          await redis.multi()
+            .incr(redisKey)
+            .expire(redisKey, 7200)
+            .exec();
+        } catch (incrError: any) {
+          console.warn(`[RateLimiter] Failed to increment recipient domain counter:`, incrError?.message);
+        }
+      }
+
+      // Calculate time until next hour
+      const nextHour = new Date(now);
+      nextHour.setHours(nextHour.getHours() + 1);
+      nextHour.setMinutes(0);
+      nextHour.setSeconds(0);
+      nextHour.setMilliseconds(0);
+      const timeUntilReset = nextHour.getTime() - now.getTime();
+
+      if (!atomicResult.canSend) {
+        console.warn(
+          `[RateLimiter] Recipient domain ${normalizedRecipientDomain} rate limit reached: ` +
+          `${atomicResult.currentCount}/${limit} emails/hour from ${normalizedSenderDomain}. ` +
+          `Email will be delayed to prevent cPanel 421 defers.`
+        );
+      }
+
+      return {
+        canSend: atomicResult.canSend,
+        timeUntilReset,
+        currentCount: atomicResult.currentCount,
+        limit,
+      };
+    } catch (error: any) {
+      // Fail open - don't block emails if recipient rate limiter fails
+      console.error(`[RateLimiter] Error checking recipient domain rate limit:`, error?.message || error);
+      return {
+        canSend: true,
+        timeUntilReset: 0,
+        currentCount: 0,
+        limit: DEFAULT_RECIPIENT_DOMAIN_LIMIT,
       };
     }
   }
