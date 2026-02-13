@@ -824,35 +824,11 @@ export async function processEmailQueue(job: Job) {
       console.warn(`[Tracking] WARNING: No emailQueueId available for tracking - email to ${toEmail} will not be tracked!`);
     }
 
-    // AUTOMATIC FROM EMAIL ROTATION: Rotate "from" email for better deliverability
-    // User configures one "from" email, system automatically rotates between variants
-    // This distributes load and prevents any single address from hitting limits
-    // 
-    // IMPORTANT: Rotation happens AFTER all protections are checked (circuit breaker, warmup, rate limits)
-    // All protections use the domain extracted from the ORIGINAL "from" email (line 481)
-    // Rotated "from" emails use the SAME domain, so protections still apply correctly
-    // Example: noreply@support.domain.com → hello@support.domain.com (same domain, different local part)
-    let rotatedFromEmail = fromEmail;
-    try {
-      const { FromEmailRotationService } = await import('../services/fromEmailRotation');
-      const fromEmailRotationService = new FromEmailRotationService();
-      // Pass domain to ensure rotation maintains domain consistency (all variants use same domain)
-      rotatedFromEmail = await fromEmailRotationService.getFromEmail(fromEmail, domain);
-      
-      // Update email_queue record with rotated "from" email for tracking
-      if (finalEmailQueueId && rotatedFromEmail !== fromEmail) {
-        await pool.query(
-          `UPDATE email_queue SET from_email = $1 WHERE id = $2`,
-          [rotatedFromEmail, finalEmailQueueId]
-        );
-      }
-    } catch (rotationError: any) {
-      // If rotation fails, use original "from" email (fail gracefully)
-      console.warn(
-        `[FromEmailRotation] Failed to rotate from email for ${fromEmail}, using original:`,
-        rotationError?.message || rotationError
-      );
-    }
+    // FROM EMAIL ROTATION DISABLED: cPanel throttles by domain, not by individual address.
+    // Rotating addresses on the same domain (e.g., notify@, hello@, alerts@) provides no benefit
+    // and may cause rejections if those addresses don't have proper mailbox/alias setup in cPanel.
+    // To re-enable, uncomment the block below and ensure multiple sending DOMAINS are configured.
+    const rotatedFromEmail = fromEmail;
 
     // Send email with tracked content and rotated "from" email
     // Wrap in timeout to prevent indefinite hangs on slow/unresponsive SMTP servers
@@ -884,7 +860,7 @@ export async function processEmailQueue(job: Job) {
     // Without this, cPanel queues messages and delivers them all at once, triggering Gmail 421 errors
     // Each 421 counts as a "defer" in cPanel, and after 5 defers/hour cPanel blocks the domain
     // Configurable via INTER_EMAIL_DELAY_MS env var (default: 3 seconds)
-    const INTER_EMAIL_DELAY_MS = parseInt(process.env.INTER_EMAIL_DELAY_MS || '3000', 10);
+    const INTER_EMAIL_DELAY_MS = parseInt(process.env.INTER_EMAIL_DELAY_MS || '8000', 10);
     if (INTER_EMAIL_DELAY_MS > 0) {
       await new Promise(resolve => setTimeout(resolve, INTER_EMAIL_DELAY_MS));
     }
