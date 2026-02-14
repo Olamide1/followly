@@ -860,7 +860,7 @@ export async function processEmailQueue(job: Job) {
     // Without this, cPanel queues messages and delivers them all at once, triggering Gmail 421 errors
     // Each 421 counts as a "defer" in cPanel, and after 5 defers/hour cPanel blocks the domain
     // Configurable via INTER_EMAIL_DELAY_MS env var (default: 3 seconds)
-    const INTER_EMAIL_DELAY_MS = parseInt(process.env.INTER_EMAIL_DELAY_MS || '8000', 10);
+    const INTER_EMAIL_DELAY_MS = parseInt(process.env.INTER_EMAIL_DELAY_MS || '7000', 10);
     if (INTER_EMAIL_DELAY_MS > 0) {
       await new Promise(resolve => setTimeout(resolve, INTER_EMAIL_DELAY_MS));
     }

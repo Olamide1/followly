@@ -64,11 +64,11 @@ export class WarmupService {
       // ESPs (Resend, Brevo, Mailjet) have higher limits, SMTP/Nodemailer is more conservative
       const isESP = ['resend', 'brevo', 'mailjet'].includes(normalizedProvider);
       
-      // Phase 1: Start small but reasonable
-      // ESPs: 100 emails/day (they handle reputation)
-      // SMTP: 50 emails/day (increased from 20 - allows ~2/hour which is safe for warmup)
-      // Industry standard: 20-50/day for new domains, we use 50 for better usability
-      const initialLimit = isESP ? 100 : 50;
+      // Phase 1: Start with a practical volume
+      // ESPs: 150 emails/day (they handle reputation)
+      // SMTP: 100 emails/day (~8/hr over 12 active hours; per-domain limits still protect us)
+      // Per-recipient-domain throttling (Gmail 14/hr, Yahoo 12/hr) is the real safety net
+      const initialLimit = isESP ? 150 : 100;
 
       const result = await pool.query(
         `INSERT INTO warmup_schedules 
@@ -232,8 +232,8 @@ export class WarmupService {
       } else if (schedule.phase < 4 && metrics.bounceRate < 0.01 && metrics.complaintRate < 0.0001) {
         // Progress to next phase
         const phase = (schedule.phase || 1) + 1;
-        // Progressive warmup: Phase 2 (200/day), Phase 3 (500/day), Phase 4 (1000/day)
-        const dailyLimit = phase === 2 ? 200 : phase === 3 ? 500 : 1000;
+        // Progressive warmup: Phase 2 (350/day), Phase 3 (700/day), Phase 4 (1000/day)
+        const dailyLimit = phase === 2 ? 350 : phase === 3 ? 700 : 1000;
         
         // Track when Phase 4 is reached for auto-completion
         if (phase === 4) {

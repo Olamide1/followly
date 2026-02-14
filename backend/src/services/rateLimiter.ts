@@ -9,17 +9,17 @@ import { WarmupService } from './warmup';
  * counting as a "defer" in cPanel. These limits prevent that burst.
  */
 const RECIPIENT_DOMAIN_LIMITS: Record<string, number> = {
-  'gmail.com': 5,
-  'googlemail.com': 5,
-  'yahoo.com': 8,
-  'yahoo.co.uk': 8,
-  'ymail.com': 8,
-  'outlook.com': 10,
-  'hotmail.com': 10,
-  'live.com': 10,
-  'aol.com': 10,
+  'gmail.com': 14,       // Gmail tolerates ~20-30/hr from authenticated senders; 14 stays well under defer threshold
+  'googlemail.com': 14,
+  'yahoo.com': 12,       // Yahoo is stricter than Gmail; 12/hr is safe
+  'yahoo.co.uk': 12,
+  'ymail.com': 12,
+  'outlook.com': 18,     // Microsoft is more lenient; 18/hr is conservative
+  'hotmail.com': 18,
+  'live.com': 18,
+  'aol.com': 15,
 };
-const DEFAULT_RECIPIENT_DOMAIN_LIMIT = 15;
+const DEFAULT_RECIPIENT_DOMAIN_LIMIT = 20;
 
 export interface RateLimitConfig {
   maxEmailsPerHour?: number; // Optional override - will be calculated based on reputation/warmup if not provided
@@ -61,8 +61,9 @@ export class RateLimiterService {
       resend: 100, // ESPs have higher limits
       brevo: 100,
       mailjet: 100,
-      nodemailer: 20, // Very conservative for cPanel SMTP - prevents 421 defers
-      // cPanel allows only 5 defers/hour per domain, so 20/hour keeps well under tolerance
+      nodemailer: 50, // cPanel typically allows 500/hr; 50/hr is 10% of that
+      // Per-recipient-domain limits (Gmail 14/hr, Yahoo 12/hr, etc.) are the real safety net
+      // They prevent bursting to any single provider which causes 421 defers
       // Note: Warmup will still restrict this to daily limit / 12 (2-hour windows)
     };
 

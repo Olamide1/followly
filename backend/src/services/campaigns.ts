@@ -490,7 +490,7 @@ export class CampaignService {
           }
 
           // Determine send time (spread out)
-          const sendDelay = Math.floor(Math.random() * 3600); // Random delay up to 1 hour
+          const sendDelay = Math.floor(Math.random() * 300); // Random delay up to 5 minutes (natural spread without massive delays)
           const scheduledAt = new Date(Date.now() + sendDelay * 1000);
 
           // Create email_queue record upfront for tracking (with rotated "from" email)
