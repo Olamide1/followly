@@ -41,7 +41,7 @@ export class CampaignService {
     }
 
     const result = await pool.query(
-      `INSERT INTO campaigns 
+      `INSERT INTO campaigns
        (user_id, name, type, subject, content, from_email, from_name, list_id, scheduled_at, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
@@ -119,10 +119,10 @@ export class CampaignService {
     return campaign;
   }
 
-  async getCampaign(userId: number, campaignId: number) {
+  async getCampaign(userIds: number[], campaignId: number) {
     const result = await pool.query(
-      'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
-      [campaignId, userId]
+      'SELECT * FROM campaigns WHERE id = $1 AND user_id = ANY($2::int[])',
+      [campaignId, userIds]
     );
 
     if (result.rows.length === 0) {
@@ -132,7 +132,7 @@ export class CampaignService {
     return result.rows[0];
   }
 
-  async listCampaigns(userId: number, options: {
+  async listCampaigns(userIds: number[], options: {
     type?: 'broadcast' | 'lifecycle';
     status?: string;
     search?: string;
@@ -143,8 +143,8 @@ export class CampaignService {
     const limit = options.limit || 50;
     const offset = (page - 1) * limit;
 
-    let query = 'SELECT * FROM campaigns WHERE user_id = $1';
-    const params: any[] = [userId];
+    let query = 'SELECT * FROM campaigns WHERE user_id = ANY($1::int[])';
+    const params: any[] = [userIds];
     let paramCount = 1;
 
     if (options.type) {
@@ -172,7 +172,7 @@ export class CampaignService {
 
     // Get stats for each campaign
     for (const campaign of result.rows) {
-      const stats = await this.getCampaignStats(userId, campaign.id);
+      const stats = await this.getCampaignStats(userIds, campaign.id);
       campaign.stats = stats;
     }
 
@@ -193,12 +193,12 @@ export class CampaignService {
   }
 
   async updateCampaign(
-    userId: number,
+    userIds: number[],
     campaignId: number,
     data: Partial<CampaignData>
   ) {
     // Verify ownership
-    const existing = await this.getCampaign(userId, campaignId);
+    const existing = await this.getCampaign(userIds, campaignId);
 
     const updates: string[] = [];
     const params: any[] = [];
@@ -249,14 +249,14 @@ export class CampaignService {
     }
 
     updates.push(`updated_at = CURRENT_TIMESTAMP`);
-    params.push(campaignId, userId);
+    params.push(campaignId, userIds);
 
     await pool.query(
-      `UPDATE campaigns SET ${updates.join(', ')} WHERE id = $${paramCount++} AND user_id = $${paramCount++}`,
+      `UPDATE campaigns SET ${updates.join(', ')} WHERE id = $${paramCount++} AND user_id = ANY($${paramCount++}::int[])`,
       params
     );
 
-    const updatedCampaign = await this.getCampaign(userId, campaignId);
+    const updatedCampaign = await this.getCampaign(userIds, campaignId);
 
     // Handle scheduling queue updates
     try {
@@ -317,10 +317,10 @@ export class CampaignService {
       if (queueError.statusCode) {
         throw queueError;
       }
-      
+
       // Queue operation failed - update status back to draft to prevent stranded campaigns
       console.error(`Failed to update scheduling queue for campaign ${campaignId}:`, queueError);
-      
+
       // Only update status if campaign was supposed to be scheduled
       if (updatedCampaign.scheduled_at && updatedCampaign.status === 'scheduled') {
         await pool.query(
@@ -340,10 +340,10 @@ export class CampaignService {
     return updatedCampaign;
   }
 
-  async deleteCampaign(userId: number, campaignId: number) {
+  async deleteCampaign(userIds: number[], campaignId: number) {
     const result = await pool.query(
-      'DELETE FROM campaigns WHERE id = $1 AND user_id = $2 RETURNING id',
-      [campaignId, userId]
+      'DELETE FROM campaigns WHERE id = $1 AND user_id = ANY($2::int[]) RETURNING id',
+      [campaignId, userIds]
     );
 
     if (result.rows.length === 0) {
@@ -365,8 +365,8 @@ export class CampaignService {
     }
   }
 
-  async sendCampaign(userId: number, campaignId: number) {
-    const campaign = await this.getCampaign(userId, campaignId);
+  async sendCampaign(userId: number, userIds: number[], campaignId: number) {
+    const campaign = await this.getCampaign(userIds, campaignId);
 
     // If campaign is already sent, don't proceed
     if (campaign.status === 'sent') {
@@ -374,28 +374,23 @@ export class CampaignService {
     }
 
     // If campaign is already "sending", check if emails were actually queued
-    // This handles cases where status was set but job failed before queuing emails
     if (campaign.status === 'sending') {
       const emailCheck = await pool.query(
-        `SELECT COUNT(*) as count FROM email_queue 
+        `SELECT COUNT(*) as count FROM email_queue
          WHERE campaign_id = $1 AND status IN ('pending', 'queued', 'sending')`,
         [campaignId]
       );
       const pendingCount = parseInt(emailCheck.rows[0]?.count || '0');
-      
+
       if (pendingCount > 0) {
-        // Emails are queued, campaign is actually sending - don't duplicate
         throw createError('Campaign already sending', 400);
       }
-      
-      // No emails queued but status is "sending" - this is a stuck state
-      // Reset to draft and proceed with sending (this is a retry scenario)
+
       console.log(`[Campaign Send] Campaign ${campaignId} was stuck in "sending" state, resetting and retrying`);
       await pool.query(
         'UPDATE campaigns SET status = $1 WHERE id = $2',
         ['draft', campaignId]
       );
-      // Update local campaign object to reflect the reset
       campaign.status = 'draft';
     }
 
@@ -406,7 +401,7 @@ export class CampaignService {
 
     // Get ALL list contacts (no pagination limit for campaigns)
     const listService = new (await import('./lists')).ListService();
-    const listContacts = await listService.getAllListContacts(userId, campaign.list_id);
+    const listContacts = await listService.getAllListContacts(userIds, campaign.list_id);
 
     if (listContacts.length === 0) {
       throw createError('No contacts in list', 400);
@@ -418,21 +413,17 @@ export class CampaignService {
       ['sending', campaignId]
     );
 
-    // Queue emails sequentially to avoid database connection pool exhaustion
-    // This prevents "max clients reached" errors when processing large campaigns
     const emailQueue = getEmailQueue();
     const fromEmail = campaign.from_email || process.env.DEFAULT_FROM_EMAIL || '';
     let queuedCount = 0;
 
-    // Process contacts sequentially to avoid database connection pool exhaustion
-    // This is slower but prevents "max clients reached" errors
     try {
       for (const contact of listContacts) {
         try {
-          // Check suppression
+          // Check suppression across team
           const suppressed = await pool.query(
-            'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
-            [userId, contact.email]
+            'SELECT id FROM suppression_list WHERE user_id = ANY($1::int[]) AND email = $2',
+            [userIds, contact.email]
           );
 
           if (suppressed.rows.length > 0) {
@@ -446,7 +437,6 @@ export class CampaignService {
             email: contact.email,
           };
 
-          // Personalize subject and content - handle both {{name}} and {{ name }} syntax
           const personalizedSubject = this.personalizationService.renderTemplate(
             campaign.subject,
             personalizationData
@@ -468,21 +458,14 @@ export class CampaignService {
             }
           );
 
-          // AUTOMATIC FROM EMAIL ROTATION: Rotate "from" email for better deliverability
-          // User configures one "from" email, system automatically rotates between variants
-          // 
-          // IMPORTANT: Domain is extracted BEFORE rotation to ensure all protections apply correctly
-          // All protections (warmup, rate limits, circuit breakers) are domain-based, not "from" email-based
-          // Rotated emails use the SAME domain, so protections still apply
+          // AUTOMATIC FROM EMAIL ROTATION
           const domain = fromEmail.split('@')[1] || '';
           let rotatedFromEmail = fromEmail;
           try {
             const { FromEmailRotationService } = await import('./fromEmailRotation');
             const fromEmailRotationService = new FromEmailRotationService();
-            // Pass domain to ensure rotation maintains domain consistency
             rotatedFromEmail = await fromEmailRotationService.getFromEmail(fromEmail, domain);
           } catch (rotationError: any) {
-            // If rotation fails, use original "from" email (fail gracefully)
             console.warn(
               `[FromEmailRotation] Failed to rotate from email for campaign ${campaignId}, using original:`,
               rotationError?.message || rotationError
@@ -490,12 +473,12 @@ export class CampaignService {
           }
 
           // Determine send time (spread out)
-          const sendDelay = Math.floor(Math.random() * 300); // Random delay up to 5 minutes (natural spread without massive delays)
+          const sendDelay = Math.floor(Math.random() * 300);
           const scheduledAt = new Date(Date.now() + sendDelay * 1000);
 
-          // Create email_queue record upfront for tracking (with rotated "from" email)
+          // Create email_queue record
           const emailQueueResult = await pool.query(
-            `INSERT INTO email_queue 
+            `INSERT INTO email_queue
              (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING id`,
@@ -506,7 +489,7 @@ export class CampaignService {
               contact.email,
               personalizedSubject,
               personalizedContent,
-              rotatedFromEmail, // Use rotated "from" email
+              rotatedFromEmail,
               campaign.from_name || process.env.DEFAULT_FROM_NAME,
               'queued',
               scheduledAt,
@@ -514,36 +497,33 @@ export class CampaignService {
           );
           const emailQueueId = emailQueueResult.rows[0].id;
 
-          // Add to Bull queue with email_queue_id for reference (with rotated "from" email)
+          // Add to Bull queue
           await emailQueue.add({
             userId,
             contactId: contact.id,
             campaignId,
-            emailQueueId, // Include email_queue_id in job data
+            emailQueueId,
             toEmail: contact.email,
             subject: personalizedSubject,
             content: personalizedContent,
-            fromEmail: rotatedFromEmail, // Use rotated "from" email
+            fromEmail: rotatedFromEmail,
             fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
             scheduledAt: scheduledAt.toISOString(),
           }, {
             delay: sendDelay * 1000,
-            jobId: `email-${emailQueueId}`, // Use email_queue_id as job ID for easy lookup
+            jobId: `email-${emailQueueId}`,
           });
 
           queuedCount++;
 
-          // Log progress for large campaigns every 50 contacts
           if (queuedCount % 50 === 0) {
             console.log(`[Campaign Send] Processed ${queuedCount}/${listContacts.length} contacts for campaign ${campaignId}`);
           }
         } catch (contactError: any) {
-          // Log error but continue with next contact
           console.error(`[Campaign Send] Failed to queue email for contact ${contact.id} (${contact.email}):`, contactError?.message || contactError);
         }
       }
     } catch (error: any) {
-      // If batch processing fails completely, reset campaign status
       console.error(`[Campaign Send] Failed to queue emails for campaign ${campaignId}:`, error);
       await pool.query(
         'UPDATE campaigns SET status = $1 WHERE id = $2',
@@ -552,28 +532,24 @@ export class CampaignService {
       throw createError(`Failed to queue campaign emails: ${error?.message || 'Unknown error'}`, 500);
     }
 
-    // Keep campaign status as "sending" - don't mark as "sent" until emails are actually delivered
-    // The campaign will be marked as "sent" automatically when all emails are processed
-    // This is handled by the checkAndUpdateCampaignStatus function called periodically
     console.log(`[Campaign Send] Queued ${queuedCount} emails for campaign ${campaignId}. Campaign remains in "sending" status until emails are delivered.`);
 
     return { queued: queuedCount };
   }
 
-  async getCampaignStats(userId: number, campaignId: number) {
+  async getCampaignStats(userIds: number[], campaignId: number) {
     // Get sent count from email_queue (emails that were sent)
     const sentResult = await pool.query(
       `SELECT COUNT(*) as sent
        FROM email_queue
-       WHERE campaign_id = $1 AND user_id = $2 AND status = 'sent'`,
-      [campaignId, userId]
+       WHERE campaign_id = $1 AND user_id = ANY($2::int[]) AND status = 'sent'`,
+      [campaignId, userIds]
     );
     const sent = parseInt(sentResult.rows[0]?.sent || '0');
 
-    // Get all engagement stats from email_events (delivered, bounced, complained, opened, clicked)
-    // Count distinct email_queue_ids to get unique events per email (not total events)
+    // Get all engagement stats from email_events
     const eventsResult = await pool.query(
-      `SELECT 
+      `SELECT
         COUNT(DISTINCT CASE WHEN e.event_type = 'delivered' THEN e.email_queue_id END) as delivered,
         COUNT(DISTINCT CASE WHEN e.event_type = 'bounced' THEN e.email_queue_id END) as bounced,
         COUNT(DISTINCT CASE WHEN e.event_type = 'complained' THEN e.email_queue_id END) as complained,
@@ -581,8 +557,8 @@ export class CampaignService {
         COUNT(DISTINCT CASE WHEN e.event_type = 'clicked' THEN e.email_queue_id END) as clicks
        FROM email_events e
        INNER JOIN email_queue eq ON e.email_queue_id = eq.id
-       WHERE eq.campaign_id = $1 AND eq.user_id = $2`,
-      [campaignId, userId]
+       WHERE eq.campaign_id = $1 AND eq.user_id = ANY($2::int[])`,
+      [campaignId, userIds]
     );
 
     const events = eventsResult.rows[0] || {};
@@ -592,29 +568,27 @@ export class CampaignService {
     const opens = parseInt(events.opens || '0');
     const clicks = parseInt(events.clicks || '0');
 
-    // Debug logging for tracking issues (only log if sent > 0 and opens/clicks are 0)
+    // Debug logging for tracking issues
     if (sent > 0 && opens === 0 && clicks === 0) {
-      // Check if there are any events at all for this campaign
       const debugResult = await pool.query(
         `SELECT event_type, COUNT(*) as count
          FROM email_events e
          INNER JOIN email_queue eq ON e.email_queue_id = eq.id
-         WHERE eq.campaign_id = $1 AND eq.user_id = $2
+         WHERE eq.campaign_id = $1 AND eq.user_id = ANY($2::int[])
          GROUP BY event_type`,
-        [campaignId, userId]
+        [campaignId, userIds]
       );
-      
-      console.log(`[Campaign Stats] Campaign ${campaignId} has ${sent} sent emails but 0 opens/clicks. Event breakdown:`, 
+
+      console.log(`[Campaign Stats] Campaign ${campaignId} has ${sent} sent emails but 0 opens/clicks. Event breakdown:`,
         debugResult.rows.map((r: any) => `${r.event_type}: ${r.count}`)
       );
-      
-      // Check if tracking tokens exist for sent emails
+
       const tokenCheck = await pool.query(
         `SELECT COUNT(DISTINCT tt.email_queue_id) as tokens_count
          FROM tracking_tokens tt
          INNER JOIN email_queue eq ON tt.email_queue_id = eq.id
-         WHERE eq.campaign_id = $1 AND eq.user_id = $2 AND eq.status = 'sent'`,
-        [campaignId, userId]
+         WHERE eq.campaign_id = $1 AND eq.user_id = ANY($2::int[]) AND eq.status = 'sent'`,
+        [campaignId, userIds]
       );
       console.log(`[Campaign Stats] Tracking tokens found for ${tokenCheck.rows[0]?.tokens_count || 0} sent emails`);
     }
@@ -637,28 +611,21 @@ export class CampaignService {
     };
   }
 
-  /**
-   * Recovery function: Re-queue any scheduled campaigns that aren't in the queue
-   * This should be called on server startup to ensure no campaigns are stranded
-   */
   async recoverScheduledCampaigns(): Promise<number> {
     try {
-      // Check if queue is initialized before attempting recovery
       let schedulingQueue;
       try {
         schedulingQueue = getSchedulingQueue();
       } catch (queueError) {
-        // Queue not initialized - skip recovery
         console.warn('Scheduling queue not available, skipping campaign recovery');
         return 0;
       }
-      
-      // Find all scheduled campaigns
+
       const result = await pool.query(
-        `SELECT id, scheduled_at, user_id 
-         FROM campaigns 
-         WHERE status = 'scheduled' 
-         AND scheduled_at IS NOT NULL 
+        `SELECT id, scheduled_at, user_id
+         FROM campaigns
+         WHERE status = 'scheduled'
+         AND scheduled_at IS NOT NULL
          AND scheduled_at > CURRENT_TIMESTAMP
          ORDER BY scheduled_at ASC`
       );
@@ -667,7 +634,6 @@ export class CampaignService {
       const now = new Date();
 
       for (const campaign of result.rows) {
-        // Validate scheduled_at exists and is valid
         if (!campaign.scheduled_at) {
           console.warn(`Campaign ${campaign.id} has null/undefined scheduled_at, skipping recovery`);
           continue;
@@ -675,27 +641,23 @@ export class CampaignService {
 
         const scheduledAt = new Date(campaign.scheduled_at);
         const scheduledTime = scheduledAt.getTime();
-        
-        // Validate: must be a valid date (not NaN) and not epoch (1970-01-01)
+
         if (isNaN(scheduledTime) || scheduledTime === 0) {
           console.warn(`Campaign ${campaign.id} has invalid scheduled_at (${campaign.scheduled_at}), skipping recovery`);
           continue;
         }
 
         const delay = Math.max(0, scheduledTime - now.getTime());
-        
+
         if (delay > 0) {
           try {
             const jobId = `campaign-${campaign.id}`;
-            
-            // Check if job already exists
+
             const existingJob = await schedulingQueue.getJob(jobId);
             if (existingJob) {
-              // Job exists, skip
               continue;
             }
 
-            // Add to queue
             await schedulingQueue.add(
               { campaignId: campaign.id },
               {
@@ -709,10 +671,8 @@ export class CampaignService {
             console.log(`Recovered scheduled campaign ${campaign.id} for ${scheduledAt.toISOString()}`);
           } catch (error: any) {
             console.error(`Failed to recover campaign ${campaign.id}:`, error);
-            // Don't throw - continue with other campaigns
           }
         } else {
-          // Scheduled time has passed - update status to draft
           console.warn(`Campaign ${campaign.id} scheduled time has passed, setting to draft`);
           await pool.query(
             'UPDATE campaigns SET status = $1 WHERE id = $2',
@@ -724,58 +684,45 @@ export class CampaignService {
       if (recovered > 0) {
         console.log(`✅ Recovered ${recovered} scheduled campaign(s) on startup`);
       }
-      
+
       return recovered;
     } catch (error: any) {
-      // If queue is not available, log but don't crash
       console.error('Failed to recover scheduled campaigns (queue may be unavailable):', error);
       return 0;
     }
   }
 
-  /**
-   * Recovery function: Re-queue emails for campaigns that are marked as 'sent' 
-   * but have no email_queue records or have failed email_queue records
-   * This helps recover from worker failures
-   */
-  async recoverCampaignEmails(userId: number, campaignId: number): Promise<{ recovered: number; errors: string[] }> {
-    const campaign = await this.getCampaign(userId, campaignId);
+  async recoverCampaignEmails(userId: number, userIds: number[], campaignId: number): Promise<{ recovered: number; errors: string[] }> {
+    const campaign = await this.getCampaign(userIds, campaignId);
     const errors: string[] = [];
 
-    // Only recover campaigns that are marked as 'sent' or 'sending'
     if (campaign.status !== 'sent' && campaign.status !== 'sending') {
       throw createError('Campaign is not in a recoverable state. Only sent/sending campaigns can be recovered.', 400);
     }
 
-    // Validate list_id
     if (!campaign.list_id) {
       throw createError('Campaign must have a list assigned', 400);
     }
 
-    // Get all list contacts
     const listService = new (await import('./lists')).ListService();
-    const listContacts = await listService.getAllListContacts(userId, campaign.list_id);
+    const listContacts = await listService.getAllListContacts(userIds, campaign.list_id);
 
     if (listContacts.length === 0) {
       throw createError('No contacts in list', 400);
     }
 
-    // Get existing email_queue records for this campaign
     const existingRecords = await pool.query(
       'SELECT contact_id, status FROM email_queue WHERE campaign_id = $1',
       [campaignId]
     );
-    
-    // Exclude contacts that have any non-failed status (pending, queued, sending, sent, bounced, complained)
-    // Only re-queue contacts with 'failed' status or no record at all
+
     const nonFailedStatuses = ['pending', 'queued', 'sending', 'sent', 'bounced', 'complained'];
     const existingContactIds = new Set(
       existingRecords.rows
-        .filter((r: any) => nonFailedStatuses.includes(r.status)) // Exclude all non-failed statuses
+        .filter((r: any) => nonFailedStatuses.includes(r.status))
         .map((r: any) => r.contact_id)
     );
 
-    // Get contacts that need to be re-queued (no record or only failed records)
     const contactsToQueue = listContacts.filter(
       (contact: any) => !existingContactIds.has(contact.id)
     );
@@ -787,8 +734,8 @@ export class CampaignService {
     const emailQueue = getEmailQueue();
     const fromEmail = campaign.from_email || process.env.DEFAULT_FROM_EMAIL || '';
     const domain = fromEmail.split('@')[1] || '';
-    
-    // CRITICAL: Check circuit breaker BEFORE queuing emails (domain-specific protection)
+
+    // Check circuit breaker
     const { CircuitBreakerService } = await import('./circuitBreaker');
     const circuitBreakerService = new CircuitBreakerService();
     const circuitCheck = await circuitBreakerService.isCircuitOpen(domain);
@@ -799,20 +746,18 @@ export class CampaignService {
         `Reason: ${circuitCheck.reason}. ` +
         `Will automatically reset after ${resetAt.toISOString()}. ` +
         `You can manually reset via admin endpoint if needed.`,
-        429 // Too Many Requests
+        429
       );
     }
-    
-    // Get provider and rate limit to calculate proper delays
-    let provider: string = 'nodemailer'; // Default
-    let hourlyLimit = 41; // Default fallback
+
+    let provider: string = 'nodemailer';
+    let hourlyLimit = 41;
     try {
       const providerService = new EmailProviderService();
       const routingService = new RoutingService(providerService);
       const routingDecision = await routingService.selectProvider(userId, 'broadcast');
       provider = routingDecision.provider;
-      
-      // Get current rate limit for this domain
+
       const rateLimiterService = new RateLimiterService();
       const rateLimitCheck = await rateLimiterService.canSend(domain, {
         userId,
@@ -823,29 +768,25 @@ export class CampaignService {
     } catch (error: any) {
       console.warn(`[Recover Campaign] Could not determine rate limit, using defaults:`, error?.message || error);
     }
-    
-    // Calculate delay between emails to respect rate limit
-    // Space emails evenly across the hour (e.g., 41/hour = ~88 seconds between emails)
-    // Add some randomization to avoid exact spacing
-    const baseDelayMs = hourlyLimit > 0 ? Math.floor((3600000 / hourlyLimit) * 0.9) : 60000; // 90% of even spacing
-    const randomVariation = Math.floor(baseDelayMs * 0.2); // ±20% variation
-    
+
+    const baseDelayMs = hourlyLimit > 0 ? Math.floor((3600000 / hourlyLimit) * 0.9) : 60000;
+    const randomVariation = Math.floor(baseDelayMs * 0.2);
+
     let recovered = 0;
-    let cumulativeDelay = 0; // Track cumulative delay to space out emails
+    let cumulativeDelay = 0;
 
     for (const contact of contactsToQueue) {
       try {
-        // Check suppression
+        // Check suppression across team
         const suppressed = await pool.query(
-          'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
-          [userId, contact.email]
+          'SELECT id FROM suppression_list WHERE user_id = ANY($1::int[]) AND email = $2',
+          [userIds, contact.email]
         );
 
         if (suppressed.rows.length > 0) {
-          continue; // Skip suppressed contacts
+          continue;
         }
 
-        // Personalize content
         const personalizationData = {
           name: contact.name || '',
           company: contact.company || '',
@@ -861,7 +802,6 @@ export class CampaignService {
           personalizationData
         );
 
-        // Append unsubscribe footer
         const { appendUnsubscribeFooter } = await import('./unsubscribe');
         personalizedContent = await appendUnsubscribeFooter(
           userId,
@@ -873,31 +813,26 @@ export class CampaignService {
           }
         );
 
-        // Calculate delay for this email (spaced out to respect rate limits)
         const delayVariation = Math.floor(Math.random() * randomVariation * 2) - randomVariation;
         const emailDelay = Math.max(0, baseDelayMs + delayVariation);
         cumulativeDelay += emailDelay;
-        
+
         const scheduledAt = new Date(Date.now() + cumulativeDelay);
 
-        // AUTOMATIC FROM EMAIL ROTATION: Rotate "from" email for better deliverability
-        // User configures one "from" email, system automatically rotates between variants
         let rotatedFromEmail = fromEmail;
         try {
           const { FromEmailRotationService } = await import('./fromEmailRotation');
           const fromEmailRotationService = new FromEmailRotationService();
           rotatedFromEmail = await fromEmailRotationService.getFromEmail(fromEmail, domain);
         } catch (rotationError: any) {
-          // If rotation fails, use original "from" email (fail gracefully)
           console.warn(
             `[FromEmailRotation] Failed to rotate from email for campaign recovery ${campaignId}, using original:`,
             rotationError?.message || rotationError
           );
         }
 
-        // Create email_queue record (with rotated "from" email)
         const emailQueueResult = await pool.query(
-          `INSERT INTO email_queue 
+          `INSERT INTO email_queue
            (user_id, contact_id, campaign_id, to_email, subject, content, from_email, from_name, status, scheduled_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id`,
@@ -908,7 +843,7 @@ export class CampaignService {
             contact.email,
             personalizedSubject,
             personalizedContent,
-            rotatedFromEmail, // Use rotated "from" email
+            rotatedFromEmail,
             campaign.from_name || process.env.DEFAULT_FROM_NAME,
             'queued',
             scheduledAt,
@@ -916,7 +851,6 @@ export class CampaignService {
         );
         const emailQueueId = emailQueueResult.rows[0].id;
 
-        // Add to Bull queue with delay to respect rate limits (with rotated "from" email)
         await emailQueue.add({
           userId,
           contactId: contact.id,
@@ -925,7 +859,7 @@ export class CampaignService {
           toEmail: contact.email,
           subject: personalizedSubject,
           content: personalizedContent,
-          fromEmail: rotatedFromEmail, // Use rotated "from" email
+          fromEmail: rotatedFromEmail,
           fromName: campaign.from_name || process.env.DEFAULT_FROM_NAME,
           scheduledAt: scheduledAt.toISOString(),
           }, {
@@ -934,8 +868,7 @@ export class CampaignService {
         });
 
         recovered++;
-        
-        // Log progress every 10 emails
+
         if (recovered % 10 === 0) {
           console.log(`[Recover Campaign] Recovered ${recovered}/${contactsToQueue.length} emails, spaced ${Math.round(emailDelay / 1000)}s apart`);
         }
@@ -944,13 +877,12 @@ export class CampaignService {
         console.error(`Failed to recover email for contact ${contact.id}:`, error);
       }
     }
-    
+
     if (recovered > 0) {
       const totalDelayMinutes = Math.round(cumulativeDelay / 60000);
       console.log(`[Recover Campaign] Successfully recovered ${recovered} emails for campaign ${campaignId}. Emails spaced out over ~${totalDelayMinutes} minutes to respect rate limit (${hourlyLimit}/hour)`);
     }
 
-    // Update campaign status back to 'sending' if it was 'sent' and we recovered some
     if (recovered > 0 && campaign.status === 'sent') {
       await pool.query(
         'UPDATE campaigns SET status = $1 WHERE id = $2',
@@ -961,45 +893,36 @@ export class CampaignService {
     return { recovered, errors };
   }
 
-  /**
-   * Verify if a campaign's emails were actually delivered
-   * Returns detailed status about email delivery
-   */
-  async verifyCampaignDelivery(userId: number, campaignId: number) {
-    const campaign = await this.getCampaign(userId, campaignId);
-    
-    // Get all emails for this campaign
+  async verifyCampaignDelivery(userIds: number[], campaignId: number) {
+    const campaign = await this.getCampaign(userIds, campaignId);
+
     const emailsResult = await pool.query(
-      `SELECT 
+      `SELECT
         status,
         COUNT(*) as count
        FROM email_queue
-       WHERE campaign_id = $1 AND user_id = $2
+       WHERE campaign_id = $1 AND user_id = ANY($2::int[])
        GROUP BY status`,
-      [campaignId, userId]
+      [campaignId, userIds]
     );
-    
+
     const statusCounts: Record<string, number> = {};
     emailsResult.rows.forEach((row: any) => {
       statusCounts[row.status] = parseInt(row.count || '0');
     });
-    
+
     const totalEmails = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
     const sentEmails = statusCounts.sent || 0;
     const pendingEmails = (statusCounts.pending || 0) + (statusCounts.queued || 0) + (statusCounts.sending || 0);
     const failedEmails = statusCounts.failed || 0;
     const bouncedEmails = statusCounts.bounced || 0;
-    
-    // Campaign is considered "actually sent" if:
-    // 1. All emails are in final states (no pending/queued/sending)
-    // 2. At least one email was successfully sent
+
     const allEmailsProcessed = pendingEmails === 0;
     const hasSentEmails = sentEmails > 0;
     const actuallySent = allEmailsProcessed && hasSentEmails;
-    
-    // Check if campaign status matches reality
+
     const statusMatches = campaign.status === 'sent' ? actuallySent : true;
-    
+
     return {
       campaignId,
       campaignStatus: campaign.status,
@@ -1011,7 +934,7 @@ export class CampaignService {
       statusCounts,
       actuallySent,
       statusMatches,
-      message: actuallySent 
+      message: actuallySent
         ? 'Campaign emails have been delivered'
         : pendingEmails > 0
         ? `${pendingEmails} emails are still being processed`
@@ -1021,4 +944,3 @@ export class CampaignService {
     };
   }
 }
-

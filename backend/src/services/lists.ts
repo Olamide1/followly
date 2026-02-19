@@ -38,10 +38,10 @@ export class ListService {
     return result.rows[0];
   }
 
-  async getList(userId: number, listId: number) {
+  async getList(userIds: number[], listId: number) {
     const result = await pool.query(
-      'SELECT * FROM lists WHERE id = $1 AND user_id = $2',
-      [listId, userId]
+      'SELECT * FROM lists WHERE id = $1 AND user_id = ANY($2::int[])',
+      [listId, userIds]
     );
 
     if (result.rows.length === 0) {
@@ -62,17 +62,17 @@ export class ListService {
       list.contact_count = parseInt(countResult.rows[0].count);
     } else {
       // Smart list - calculate dynamically
-      const contacts = await this.evaluateSmartList(userId, list.rules);
+      const contacts = await this.evaluateSmartList(userIds, list.rules);
       list.contact_count = contacts.length;
     }
 
     return list;
   }
 
-  async listLists(userId: number) {
+  async listLists(userIds: number[]) {
     const result = await pool.query(
-      'SELECT * FROM lists WHERE user_id = $1 ORDER BY created_at DESC',
-      [userId]
+      'SELECT * FROM lists WHERE user_id = ANY($1::int[]) ORDER BY created_at DESC',
+      [userIds]
     );
 
     // Get contact counts
@@ -85,7 +85,7 @@ export class ListService {
         list.contact_count = parseInt(countResult.rows[0].count);
       } else if (list.rules) {
         const rules = typeof list.rules === 'string' ? JSON.parse(list.rules) : list.rules;
-        const contacts = await this.evaluateSmartList(userId, rules);
+        const contacts = await this.evaluateSmartList(userIds, rules);
         list.contact_count = contacts.length;
       }
     }
@@ -94,7 +94,7 @@ export class ListService {
   }
 
   async updateList(
-    userId: number,
+    userIds: number[],
     listId: number,
     data: {
       name?: string;
@@ -120,24 +120,24 @@ export class ListService {
     }
 
     if (updates.length === 0) {
-      return this.getList(userId, listId);
+      return this.getList(userIds, listId);
     }
 
     updates.push(`updated_at = CURRENT_TIMESTAMP`);
-    params.push(listId, userId);
+    params.push(listId, userIds);
 
     await pool.query(
-      `UPDATE lists SET ${updates.join(', ')} WHERE id = $${paramCount++} AND user_id = $${paramCount++}`,
+      `UPDATE lists SET ${updates.join(', ')} WHERE id = $${paramCount++} AND user_id = ANY($${paramCount++}::int[])`,
       params
     );
 
-    return this.getList(userId, listId);
+    return this.getList(userIds, listId);
   }
 
-  async deleteList(userId: number, listId: number) {
+  async deleteList(userIds: number[], listId: number) {
     const result = await pool.query(
-      'DELETE FROM lists WHERE id = $1 AND user_id = $2 RETURNING id',
-      [listId, userId]
+      'DELETE FROM lists WHERE id = $1 AND user_id = ANY($2::int[]) RETURNING id',
+      [listId, userIds]
     );
 
     if (result.rows.length === 0) {
@@ -145,10 +145,10 @@ export class ListService {
     }
   }
 
-  async addContactToList(userId: number, listId: number, contactId: number) {
+  async addContactToList(userIds: number[], listId: number, contactId: number) {
     // Validate all parameters are valid numbers
-    if (!Number.isInteger(userId) || userId <= 0) {
-      throw createError('Invalid user ID', 400);
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      throw createError('Invalid user IDs', 400);
     }
     if (!Number.isInteger(listId) || listId <= 0) {
       throw createError('Invalid list ID', 400);
@@ -159,8 +159,8 @@ export class ListService {
 
     // Verify list ownership
     const listResult = await pool.query(
-      'SELECT type FROM lists WHERE id = $1 AND user_id = $2',
-      [listId, userId]
+      'SELECT type FROM lists WHERE id = $1 AND user_id = ANY($2::int[])',
+      [listId, userIds]
     );
 
     if (listResult.rows.length === 0) {
@@ -173,8 +173,8 @@ export class ListService {
 
     // Verify contact ownership
     const contactResult = await pool.query(
-      'SELECT id FROM contacts WHERE id = $1 AND user_id = $2',
-      [contactId, userId]
+      'SELECT id FROM contacts WHERE id = $1 AND user_id = ANY($2::int[])',
+      [contactId, userIds]
     );
 
     if (contactResult.rows.length === 0) {
@@ -187,10 +187,10 @@ export class ListService {
     );
   }
 
-  async addContactsToList(userId: number, listId: number, contactIds: number[]) {
+  async addContactsToList(userIds: number[], listId: number, contactIds: number[]) {
     // Validate all parameters
-    if (!Number.isInteger(userId) || userId <= 0) {
-      throw createError('Invalid user ID', 400);
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      throw createError('Invalid user IDs', 400);
     }
     if (!Number.isInteger(listId) || listId <= 0) {
       throw createError('Invalid list ID', 400);
@@ -214,8 +214,8 @@ export class ListService {
 
     // Verify list ownership
     const listResult = await pool.query(
-      'SELECT type FROM lists WHERE id = $1 AND user_id = $2',
-      [listId, userId]
+      'SELECT type FROM lists WHERE id = $1 AND user_id = ANY($2::int[])',
+      [listId, userIds]
     );
 
     if (listResult.rows.length === 0) {
@@ -226,10 +226,10 @@ export class ListService {
       throw createError('Cannot manually add contacts to smart lists', 400);
     }
 
-    // Verify all contacts belong to user
+    // Verify all contacts belong to team
     const contactResult = await pool.query(
-      'SELECT id FROM contacts WHERE id = ANY($1) AND user_id = $2',
-      [validContactIds, userId]
+      'SELECT id FROM contacts WHERE id = ANY($1) AND user_id = ANY($2::int[])',
+      [validContactIds, userIds]
     );
 
     if (contactResult.rows.length !== validContactIds.length) {
@@ -257,21 +257,21 @@ export class ListService {
     };
   }
 
-  async removeContactFromList(_userId: number, listId: number, contactId: number) {
+  async removeContactFromList(_userIds: number[], listId: number, contactId: number) {
     await pool.query(
       'DELETE FROM list_contacts WHERE list_id = $1 AND contact_id = $2',
       [listId, contactId]
     );
   }
 
-  async getListContacts(userId: number, listId: number, options: {
+  async getListContacts(userIds: number[], listId: number, options: {
     page?: number;
     limit?: number;
   } = {}) {
     // Verify ownership
     const listResult = await pool.query(
-      'SELECT type, rules FROM lists WHERE id = $1 AND user_id = $2',
-      [listId, userId]
+      'SELECT type, rules FROM lists WHERE id = $1 AND user_id = ANY($2::int[])',
+      [listId, userIds]
     );
 
     if (listResult.rows.length === 0) {
@@ -290,7 +290,7 @@ export class ListService {
     } else {
       // Smart list
       const rules = typeof list.rules === 'string' ? JSON.parse(list.rules) : list.rules;
-      const contacts = await this.evaluateSmartList(userId, rules);
+      const contacts = await this.evaluateSmartList(userIds, rules);
       contactIds = contacts.map((c: any) => c.id);
     }
 
@@ -306,11 +306,11 @@ export class ListService {
     const offset = (page - 1) * limit;
 
     const result = await pool.query(
-      `SELECT * FROM contacts 
-       WHERE id = ANY($1) AND user_id = $2
+      `SELECT * FROM contacts
+       WHERE id = ANY($1) AND user_id = ANY($2::int[])
        ORDER BY created_at DESC
        LIMIT $3 OFFSET $4`,
-      [contactIds, userId, limit, offset]
+      [contactIds, userIds, limit, offset]
     );
 
     return {
@@ -325,11 +325,11 @@ export class ListService {
   }
 
   // Get ALL contacts from a list without pagination (for campaigns)
-  async getAllListContacts(userId: number, listId: number): Promise<any[]> {
+  async getAllListContacts(userIds: number[], listId: number): Promise<any[]> {
     // Verify ownership
     const listResult = await pool.query(
-      'SELECT type, rules FROM lists WHERE id = $1 AND user_id = $2',
-      [listId, userId]
+      'SELECT type, rules FROM lists WHERE id = $1 AND user_id = ANY($2::int[])',
+      [listId, userIds]
     );
 
     if (listResult.rows.length === 0) {
@@ -348,7 +348,7 @@ export class ListService {
     } else {
       // Smart list
       const rules = typeof list.rules === 'string' ? JSON.parse(list.rules) : list.rules;
-      const contacts = await this.evaluateSmartList(userId, rules);
+      const contacts = await this.evaluateSmartList(userIds, rules);
       contactIds = contacts.map((c: any) => c.id);
     }
 
@@ -358,24 +358,24 @@ export class ListService {
 
     // Get all contacts without pagination
     const result = await pool.query(
-      `SELECT * FROM contacts 
-       WHERE id = ANY($1) AND user_id = $2
+      `SELECT * FROM contacts
+       WHERE id = ANY($1) AND user_id = ANY($2::int[])
        ORDER BY created_at DESC`,
-      [contactIds, userId]
+      [contactIds, userIds]
     );
 
     return result.rows;
   }
 
   // Preview contacts matching rules without saving (for smart list preview)
-  async previewListContacts(userId: number, listId: number, rules: SmartListRules, options: {
+  async previewListContacts(userIds: number[], listId: number, rules: SmartListRules, options: {
     page?: number;
     limit?: number;
   } = {}) {
     // Verify ownership (but don't require list to be smart type - allows previewing rules)
     const listResult = await pool.query(
-      'SELECT id FROM lists WHERE id = $1 AND user_id = $2',
-      [listId, userId]
+      'SELECT id FROM lists WHERE id = $1 AND user_id = ANY($2::int[])',
+      [listId, userIds]
     );
 
     if (listResult.rows.length === 0) {
@@ -383,7 +383,7 @@ export class ListService {
     }
 
     // Evaluate rules without saving
-    const contacts = await this.evaluateSmartList(userId, rules);
+    const contacts = await this.evaluateSmartList(userIds, rules);
     const contactIds = contacts.map((c: any) => c.id);
 
     if (contactIds.length === 0) {
@@ -398,11 +398,11 @@ export class ListService {
     const offset = (page - 1) * limit;
 
     const result = await pool.query(
-      `SELECT * FROM contacts 
-       WHERE id = ANY($1) AND user_id = $2
+      `SELECT * FROM contacts
+       WHERE id = ANY($1) AND user_id = ANY($2::int[])
        ORDER BY created_at DESC
        LIMIT $3 OFFSET $4`,
-      [contactIds, userId, limit, offset]
+      [contactIds, userIds, limit, offset]
     );
 
     return {
@@ -425,6 +425,7 @@ export class ListService {
   // Import contacts from CSV and add them to a list
   async importContactsFromCSV(
     userId: number,
+    userIds: number[],
     listId: number,
     contacts: Array<{
       email: string;
@@ -458,8 +459,8 @@ export class ListService {
 
       // Verify list ownership and type
       const listResult = await client.query(
-        'SELECT type FROM lists WHERE id = $1 AND user_id = $2',
-        [listId, userId]
+        'SELECT type FROM lists WHERE id = $1 AND user_id = ANY($2::int[])',
+        [listId, userIds]
       );
 
       if (listResult.rows.length === 0) {
@@ -472,11 +473,11 @@ export class ListService {
 
       // Check which contacts are already in the list (for reporting)
       const existingListContacts = await client.query(
-        `SELECT c.id, c.email 
+        `SELECT c.id, c.email
          FROM contacts c
          INNER JOIN list_contacts lc ON c.id = lc.contact_id
-         WHERE lc.list_id = $1 AND c.user_id = $2`,
-        [listId, userId]
+         WHERE lc.list_id = $1 AND c.user_id = ANY($2::int[])`,
+        [listId, userIds]
       );
       const listContactIds = new Set(existingListContacts.rows.map((r: any) => r.id));
 
@@ -494,7 +495,7 @@ export class ListService {
 
       for (const contactData of contacts) {
         const normalizedEmail = contactData.email.toLowerCase().trim();
-        
+
         // Validate email format
         if (!this.isValidEmail(normalizedEmail)) {
           failed++;
@@ -513,31 +514,31 @@ export class ListService {
 
       // Import/update contacts in batches for better performance
       const BATCH_SIZE = 100; // Process contacts in batches of 100
-      
+
       for (let i = 0; i < uniqueContacts.length; i += BATCH_SIZE) {
         const batch = uniqueContacts.slice(i, i + BATCH_SIZE);
         const normalizedEmails = batch.map(c => c.email.toLowerCase().trim());
-        
-        // Batch check for existing contacts
+
+        // Batch check for existing contacts within team
         const existingContactsResult = await client.query(
-          'SELECT id, email FROM contacts WHERE user_id = $1 AND email = ANY($2)',
-          [userId, normalizedEmails]
+          'SELECT id, email FROM contacts WHERE user_id = ANY($1::int[]) AND email = ANY($2)',
+          [userIds, normalizedEmails]
         );
-        
+
         const existingContactsMap = new Map<string, number>();
         existingContactsResult.rows.forEach((row: any) => {
           existingContactsMap.set(row.email.toLowerCase(), row.id);
         });
-        
+
         const contactsToInsert: any[] = [];
         const contactsToUpdate: Array<{ id: number; data: any }> = [];
-        
+
         // Separate contacts into insert and update batches
         for (const contactData of batch) {
           try {
             const normalizedEmail = contactData.email.toLowerCase().trim();
             const existingId = existingContactsMap.get(normalizedEmail);
-            
+
             if (existingId) {
               // Will update
               contactsToUpdate.push({ id: existingId, data: contactData });
@@ -557,29 +558,29 @@ export class ListService {
             errors.push(`${contactData.email}: ${error.message}`);
           }
         }
-        
+
         // Batch insert new contacts
         if (contactsToInsert.length > 0) {
           const insertValues = contactsToInsert.map((_, index) => {
             const base = index * 7;
             return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
           }).join(', ');
-          
+
           const insertParams: any[] = [];
           contactsToInsert.forEach(contact => {
             insertParams.push(userId, contact.email, contact.name, contact.company, contact.role, contact.country, contact.subscription_status);
           });
-          
+
           const insertResult = await client.query(
             `INSERT INTO contacts (user_id, email, name, company, role, country, subscription_status)
              VALUES ${insertValues}
              RETURNING id, email`,
             insertParams
           );
-          
+
           added += insertResult.rows.length;
           imported += insertResult.rows.length;
-          
+
           // Add new contact IDs to contactIds (if not already in list)
           insertResult.rows.forEach((row: any) => {
             const contactId = row.id;
@@ -590,12 +591,12 @@ export class ListService {
             }
           });
         }
-        
+
         // Batch update existing contacts
         for (const { id: contactId, data: contactData } of contactsToUpdate) {
           try {
             const wasAlreadyInList = listContactIds.has(contactId);
-            
+
             // Update contact fields (only non-empty values)
             const updates: string[] = [];
             const params: any[] = [];
@@ -624,30 +625,30 @@ export class ListService {
 
             if (updates.length > 0) {
               updates.push(`updated_at = CURRENT_TIMESTAMP`);
-              params.push(contactId, userId);
+              params.push(contactId);
               await client.query(
-                `UPDATE contacts SET ${updates.join(', ')} WHERE id = $${paramCount++} AND user_id = $${paramCount++}`,
+                `UPDATE contacts SET ${updates.join(', ')} WHERE id = $${paramCount++}`,
                 params
               );
               updated++;
             } else {
               updated++;
             }
-            
+
             // Only add to contactIds if not already in list
             if (!wasAlreadyInList) {
               contactIds.push(contactId);
             } else {
               alreadyInList++;
             }
-            
+
             imported++;
           } catch (error: any) {
             failed++;
             errors.push(`${contactData.email}: ${error.message}`);
           }
         }
-        
+
         // Log progress for large imports
         if (uniqueContacts.length > 500) {
           console.log(`[Contact Import] Processed ${Math.min(i + BATCH_SIZE, uniqueContacts.length)}/${uniqueContacts.length} contacts for list ${listId}`);
@@ -692,13 +693,13 @@ export class ListService {
     };
   }
 
-  private async evaluateSmartList(userId: number, rules: SmartListRules): Promise<any[]> {
+  private async evaluateSmartList(userIds: number[], rules: SmartListRules): Promise<any[]> {
     if (!rules || !rules.rules || rules.rules.length === 0) {
       return [];
     }
 
-    let query = 'SELECT DISTINCT c.* FROM contacts c WHERE c.user_id = $1';
-    const params: any[] = [userId];
+    let query = 'SELECT DISTINCT c.* FROM contacts c WHERE c.user_id = ANY($1::int[])';
+    const params: any[] = [userIds];
     let paramCount = 1;
 
     const conditions: string[] = [];
@@ -749,12 +750,12 @@ export class ListService {
         return `c.subscription_status = $${paramCount++}`;
 
       case 'tag':
-        // Join with tags
+        // Join with tags - check across all team user IDs
         params.push(rule.value);
         return `c.id IN (
           SELECT ct.contact_id FROM contact_tags ct
           INNER JOIN tags t ON ct.tag_id = t.id
-          WHERE t.name = $${paramCount++} AND t.user_id = $1
+          WHERE t.name = $${paramCount++} AND t.user_id = ANY($1::int[])
         )`;
 
       case 'signup_date':
@@ -774,4 +775,3 @@ export class ListService {
     return null;
   }
 }
-

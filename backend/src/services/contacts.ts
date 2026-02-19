@@ -13,15 +13,16 @@ export interface ContactData {
 }
 
 export class ContactService {
-  async createContact(userId: number, data: ContactData) {
+  async createContact(userId: number, data: ContactData, teamUserIds?: number[]) {
+    const ownershipIds = teamUserIds || [userId];
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Check if contact already exists
+      // Check if contact already exists within the team
       const existing = await client.query(
-        'SELECT id FROM contacts WHERE user_id = $1 AND email = $2',
-        [userId, data.email.toLowerCase()]
+        'SELECT id FROM contacts WHERE user_id = ANY($1::int[]) AND email = $2',
+        [ownershipIds, data.email.toLowerCase()]
       );
 
       if (existing.rows.length > 0) {
@@ -30,7 +31,7 @@ export class ContactService {
 
       // Create contact
       const result = await client.query(
-        `INSERT INTO contacts 
+        `INSERT INTO contacts
          (user_id, email, name, company, role, country, subscription_status)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
@@ -79,10 +80,10 @@ export class ContactService {
     }
   }
 
-  async getContact(userId: number, contactId: number) {
+  async getContact(userIds: number[], contactId: number) {
     const result = await pool.query(
-      'SELECT * FROM contacts WHERE id = $1 AND user_id = $2',
-      [contactId, userId]
+      'SELECT * FROM contacts WHERE id = $1 AND user_id = ANY($2::int[])',
+      [contactId, userIds]
     );
 
     if (result.rows.length === 0) {
@@ -114,7 +115,7 @@ export class ContactService {
   }
 
   async listContacts(
-    userId: number,
+    userIds: number[],
     options: {
       page?: number;
       limit?: number;
@@ -127,8 +128,8 @@ export class ContactService {
     const limit = options.limit || 50;
     const offset = (page - 1) * limit;
 
-    let query = 'SELECT * FROM contacts WHERE user_id = $1';
-    const params: any[] = [userId];
+    let query = 'SELECT * FROM contacts WHERE user_id = ANY($1::int[])';
+    const params: any[] = [userIds];
     let paramCount = 1;
 
     if (options.search) {
@@ -156,8 +157,8 @@ export class ContactService {
     const result = await pool.query(query, params);
 
     // Get total count - build count query separately for reliability
-    let countQuery = 'SELECT COUNT(*) as count FROM contacts WHERE user_id = $1';
-    const countParams: any[] = [userId];
+    let countQuery = 'SELECT COUNT(*) as count FROM contacts WHERE user_id = ANY($1::int[])';
+    const countParams: any[] = [userIds];
     let countParamCount = 1;
 
     if (options.search) {
@@ -193,20 +194,22 @@ export class ContactService {
     };
   }
 
-  async updateContact(userId: number, contactId: number, data: Partial<ContactData>) {
+  async updateContact(userIds: number[], contactId: number, data: Partial<ContactData>) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
       // Verify ownership
       const existing = await client.query(
-        'SELECT id FROM contacts WHERE id = $1 AND user_id = $2',
-        [contactId, userId]
+        'SELECT id, user_id FROM contacts WHERE id = $1 AND user_id = ANY($2::int[])',
+        [contactId, userIds]
       );
 
       if (existing.rows.length === 0) {
         throw createError('Contact not found', 404);
       }
+
+      const contactOwnerId = existing.rows[0].user_id;
 
       // Update contact
       const updates: string[] = [];
@@ -236,9 +239,9 @@ export class ContactService {
 
       if (updates.length > 0) {
         updates.push(`updated_at = CURRENT_TIMESTAMP`);
-        params.push(contactId, userId);
+        params.push(contactId);
         await client.query(
-          `UPDATE contacts SET ${updates.join(', ')} WHERE id = $${paramCount++} AND user_id = $${paramCount++}`,
+          `UPDATE contacts SET ${updates.join(', ')} WHERE id = $${paramCount++}`,
           params
         );
       }
@@ -261,14 +264,14 @@ export class ContactService {
           await client.query(
             `INSERT INTO custom_fields (user_id, contact_id, field_name, field_value)
              VALUES ($1, $2, $3, $4)`,
-            [userId, contactId, fieldName, fieldValue]
+            [contactOwnerId, contactId, fieldName, fieldValue]
           );
         }
       }
 
       await client.query('COMMIT');
 
-      return this.getContact(userId, contactId);
+      return this.getContact(userIds, contactId);
     } catch (error: any) {
       await client.query('ROLLBACK');
       throw error;
@@ -277,10 +280,10 @@ export class ContactService {
     }
   }
 
-  async deleteContact(userId: number, contactId: number) {
+  async deleteContact(userIds: number[], contactId: number) {
     const result = await pool.query(
-      'DELETE FROM contacts WHERE id = $1 AND user_id = $2 RETURNING id',
-      [contactId, userId]
+      'DELETE FROM contacts WHERE id = $1 AND user_id = ANY($2::int[]) RETURNING id',
+      [contactId, userIds]
     );
 
     if (result.rows.length === 0) {
@@ -288,14 +291,14 @@ export class ContactService {
     }
   }
 
-  async deleteContacts(userId: number, contactIds: number[]) {
+  async deleteContacts(userIds: number[], contactIds: number[]) {
     if (contactIds.length === 0) {
       throw createError('No contact IDs provided', 400);
     }
 
     const result = await pool.query(
-      'DELETE FROM contacts WHERE id = ANY($1) AND user_id = $2 RETURNING id',
-      [contactIds, userId]
+      'DELETE FROM contacts WHERE id = ANY($1) AND user_id = ANY($2::int[]) RETURNING id',
+      [contactIds, userIds]
     );
 
     return {
@@ -304,20 +307,20 @@ export class ContactService {
     };
   }
 
-  async getContactLists(userId: number, contactId: number) {
+  async getContactLists(userIds: number[], contactId: number) {
     const result = await pool.query(
       `SELECT l.id, l.name, l.type, l.description
        FROM lists l
        INNER JOIN list_contacts lc ON l.id = lc.list_id
-       WHERE lc.contact_id = $1 AND l.user_id = $2
+       WHERE lc.contact_id = $1 AND l.user_id = ANY($2::int[])
        ORDER BY l.name ASC`,
-      [contactId, userId]
+      [contactId, userIds]
     );
 
     return result.rows;
   }
 
-  async getContactListsBatch(userId: number, contactIds: number[]): Promise<Record<number, any[]>> {
+  async getContactListsBatch(userIds: number[], contactIds: number[]): Promise<Record<number, any[]>> {
     if (contactIds.length === 0) {
       return {};
     }
@@ -327,9 +330,9 @@ export class ContactService {
       `SELECT lc.contact_id, l.id, l.name, l.type, l.description
        FROM lists l
        INNER JOIN list_contacts lc ON l.id = lc.list_id
-       WHERE lc.contact_id = ANY($1) AND l.user_id = $2
+       WHERE lc.contact_id = ANY($1) AND l.user_id = ANY($2::int[])
        ORDER BY lc.contact_id, l.name ASC`,
-      [contactIds, userId]
+      [contactIds, userIds]
     );
 
     // Group by contact_id
@@ -357,11 +360,12 @@ export class ContactService {
     return listsByContact;
   }
 
-  async importContacts(userId: number, contacts: ContactData[]): Promise<{
+  async importContacts(userId: number, contacts: ContactData[], teamUserIds?: number[]): Promise<{
     success: number;
     failed: number;
     errors: string[];
   }> {
+    const ownershipIds = teamUserIds || [userId];
     const client = await pool.connect();
     const errors: string[] = [];
     let success = 0;
@@ -372,18 +376,18 @@ export class ContactService {
 
       for (const contactData of contacts) {
         try {
-          // Check if exists
+          // Check if exists within team
           const existing = await client.query(
-            'SELECT id FROM contacts WHERE user_id = $1 AND email = $2',
-            [userId, contactData.email.toLowerCase()]
+            'SELECT id FROM contacts WHERE user_id = ANY($1::int[]) AND email = $2',
+            [ownershipIds, contactData.email.toLowerCase()]
           );
 
           if (existing.rows.length > 0) {
             // Update existing
-            await this.updateContact(userId, existing.rows[0].id, contactData);
+            await this.updateContact(ownershipIds, existing.rows[0].id, contactData);
           } else {
             // Create new
-            await this.createContact(userId, contactData);
+            await this.createContact(userId, contactData, ownershipIds);
           }
           success++;
         } catch (error: any) {
@@ -403,4 +407,3 @@ export class ContactService {
     return { success, failed, errors };
   }
 }
-

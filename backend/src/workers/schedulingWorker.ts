@@ -94,7 +94,14 @@ export async function processSchedulingQueue(job: Job) {
       new (await import('../services/warmup')).WarmupService()
     );
 
-    await campaignService.sendCampaign(campaign.user_id, campaignId);
+    const { resolveTeamUserIds } = await import('../services/team');
+    let teamUserIds: number[];
+    try {
+      teamUserIds = await resolveTeamUserIds(campaign.user_id);
+    } catch {
+      teamUserIds = [campaign.user_id];
+    }
+    await campaignService.sendCampaign(campaign.user_id, teamUserIds, campaignId);
 
     return { success: true };
   } catch (error: any) {

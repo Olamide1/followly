@@ -14,6 +14,7 @@ import {
   wrapLinksWithTracking,
 } from '../services/tracking';
 import { getEmailQueue } from '../services/queues';
+import { resolveTeamUserIds } from '../services/team';
 
 let routingService: RoutingService | null = null;
 let warmupService: WarmupService | null = null;
@@ -297,10 +298,18 @@ async function loadUserProviders(userId: number): Promise<EmailProviderService> 
   // Create new provider service for this user
   const providerService = new EmailProviderService();
 
-  // Load user's provider configs from database
+  // Resolve team user IDs to load providers from all team members
+  let teamUserIds: number[];
+  try {
+    teamUserIds = await resolveTeamUserIds(userId);
+  } catch {
+    teamUserIds = [userId];
+  }
+
+  // Load user's/team's provider configs from database
   const result = await pool.query(
-    'SELECT * FROM provider_configs WHERE user_id = $1 AND is_active = true ORDER BY is_default DESC, created_at ASC',
-    [userId]
+    'SELECT * FROM provider_configs WHERE user_id = ANY($1::int[]) AND is_active = true ORDER BY is_default DESC, created_at ASC',
+    [teamUserIds]
   );
 
   if (result.rows.length === 0) {
@@ -546,10 +555,18 @@ export async function processEmailQueue(job: Job) {
     // Note: RoutingService needs access to the provider service, but it's created once
     // We'll pass the provider service directly when needed
 
-    // Check if contact is suppressed
+    // Resolve team user IDs for suppression check
+    let teamUserIds: number[];
+    try {
+      teamUserIds = await resolveTeamUserIds(userId);
+    } catch {
+      teamUserIds = [userId];
+    }
+
+    // Check if contact is suppressed (across team)
     const suppressed = await pool.query(
-      'SELECT id FROM suppression_list WHERE user_id = $1 AND email = $2',
-      [userId, toEmail]
+      'SELECT id FROM suppression_list WHERE user_id = ANY($1::int[]) AND email = $2',
+      [teamUserIds, toEmail]
     );
 
     if (suppressed.rows.length > 0) {

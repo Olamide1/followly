@@ -7,6 +7,8 @@ interface User {
   email: string
   name?: string
   company?: string
+  team_id?: number
+  team_role?: string
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -128,11 +130,16 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
   }
 
+  const hasTeam = computed(() => !!user.value?.team_id)
+  const isTeamOwner = computed(() => user.value?.team_role === 'owner')
+
   return {
     user,
     token,
     isLoading,
     isAuthenticated,
+    hasTeam,
+    isTeamOwner,
     login,
     register,
     fetchUser,

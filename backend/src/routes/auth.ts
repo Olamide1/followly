@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { pool } from '../database/connection';
 import { createError } from '../middleware/errorHandler';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { TeamService } from '../services/team';
 
 const router = Router();
 
@@ -127,7 +128,7 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
 router.get('/me', authenticateToken, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, name, company, role, company_address, custom_footer_text, created_at FROM users WHERE id = $1',
+      'SELECT id, email, name, company, role, company_address, custom_footer_text, team_id, team_role, created_at FROM users WHERE id = $1',
       [req.userId]
     );
 
@@ -179,6 +180,64 @@ router.put('/footer-settings', authenticateToken, async (req: AuthRequest, res: 
     );
 
     res.json({ user: result.rows[0] });
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Get invite info (public)
+router.get('/invite-info', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const token = req.query.token as string;
+    if (!token) {
+      throw createError('Token is required', 400);
+    }
+
+    const teamService = new TeamService();
+    const info = await teamService.getInviteInfo(token);
+    res.json(info);
+  } catch (error: any) {
+    next(error);
+  }
+});
+
+// Accept invite (public)
+router.post('/accept-invite', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { token, name, password } = req.body;
+    if (!token) {
+      throw createError('Token is required', 400);
+    }
+    if (!name || !name.trim()) {
+      throw createError('Name is required', 400);
+    }
+
+    const teamService = new TeamService();
+    const user = await teamService.acceptInvite(token, name.trim(), password);
+
+    // Generate JWT token for the user
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      throw createError('JWT secret not configured', 500);
+    }
+
+    const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
+    // @ts-ignore
+    const jwtToken = jwt.sign(
+      { userId: user.id, email: user.email },
+      secret,
+      { expiresIn }
+    ) as string;
+
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        company: user.company,
+      },
+      token: jwtToken,
+    });
   } catch (error: any) {
     next(error);
   }

@@ -15,8 +15,8 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
     const result = await pool.query(
       `SELECT id, provider, from_email, from_name, daily_limit, is_active, is_default, created_at, updated_at,
        smtp_host, smtp_port, smtp_secure, smtp_user, dkim_domain, dkim_selector
-       FROM provider_configs WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC`,
-      [req.userId]
+       FROM provider_configs WHERE user_id = ANY($1::int[]) ORDER BY is_default DESC, created_at DESC`,
+      [req.teamUserIds!]
     );
 
     // Don't send API keys and sensitive SMTP fields
@@ -456,9 +456,9 @@ router.get('/domains/status', async (req: AuthRequest, res: Response, next: Next
 
     // Get all unique domains from provider configs
     const domainsResult = await pool.query(
-      `SELECT DISTINCT from_email FROM provider_configs 
-       WHERE user_id = $1 AND is_active = true AND from_email IS NOT NULL`,
-      [userId]
+      `SELECT DISTINCT from_email FROM provider_configs
+       WHERE user_id = ANY($1::int[]) AND is_active = true AND from_email IS NOT NULL`,
+      [req.teamUserIds!]
     );
 
     const domains = domainsResult.rows.map((row: any) => {
@@ -475,18 +475,18 @@ router.get('/domains/status', async (req: AuthRequest, res: Response, next: Next
         // Get rate limit status (with dynamic limits based on reputation/warmup)
         // Get provider for this domain to calculate accurate limits
         const domainProviders = await pool.query(
-          `SELECT DISTINCT provider FROM provider_configs 
-           WHERE user_id = $1 AND from_email LIKE $2 AND is_active = true LIMIT 1`,
-          [userId, `%@${domain}`]
+          `SELECT DISTINCT provider FROM provider_configs
+           WHERE user_id = ANY($1::int[]) AND from_email LIKE $2 AND is_active = true LIMIT 1`,
+          [req.teamUserIds!, `%@${domain}`]
         );
         const primaryProvider = domainProviders.rows[0]?.provider || 'nodemailer';
         const rateLimitStatus = await rateLimiterService.getStatus(domain, userId, primaryProvider);
 
         // Get warmup status for each provider
         const providers = await pool.query(
-          `SELECT DISTINCT provider FROM provider_configs 
-           WHERE user_id = $1 AND from_email LIKE $2 AND is_active = true`,
-          [userId, `%@${domain}`]
+          `SELECT DISTINCT provider FROM provider_configs
+           WHERE user_id = ANY($1::int[]) AND from_email LIKE $2 AND is_active = true`,
+          [req.teamUserIds!, `%@${domain}`]
         );
 
         const warmupStatuses = await Promise.all(

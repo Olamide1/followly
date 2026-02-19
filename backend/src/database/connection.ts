@@ -87,6 +87,9 @@ async function runMigrations(): Promise<void> {
       addEmailEventsProviderEventIdIndex,
       addPasswordResetFields,
       addNodemailerProvider,
+      createTeamsTable,
+      addTeamIdToUsers,
+      createTeamInvitationsTable,
     ];
     
     for (const migration of migrations) {
@@ -634,6 +637,66 @@ async function addNodemailerProvider(client: PoolClient): Promise<void> {
     ALTER TABLE provider_configs 
     ADD CONSTRAINT provider_configs_provider_check 
     CHECK (provider IN ('brevo', 'mailjet', 'resend', 'nodemailer'))
+  `);
+}
+
+async function createTeamsTable(client: PoolClient): Promise<void> {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS teams (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_teams_owner_id ON teams(owner_id)
+  `);
+}
+
+async function addTeamIdToUsers(client: PoolClient): Promise<void> {
+  await client.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_users_team_id ON users(team_id)
+  `);
+
+  await client.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS team_role VARCHAR(50)
+  `);
+}
+
+async function createTeamInvitationsTable(client: PoolClient): Promise<void> {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS team_invitations (
+      id SERIAL PRIMARY KEY,
+      team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+      email VARCHAR(255) NOT NULL,
+      token VARCHAR(255) NOT NULL UNIQUE,
+      role VARCHAR(50) DEFAULT 'member',
+      status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'expired', 'cancelled')),
+      invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      expires_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_team_invitations_token ON team_invitations(token)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_team_invitations_team_id ON team_invitations(team_id)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_team_invitations_email ON team_invitations(email)
   `);
 }
 

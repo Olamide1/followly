@@ -105,10 +105,10 @@ router.get('/warmup/status', async (req: AuthRequest, res: Response, next: NextF
         SUBSTRING(from_email FROM '@(.*)$')::text as domain,
         provider
        FROM provider_configs
-       WHERE user_id = $1 AND is_active = true AND from_email IS NOT NULL`,
-      [userId]
+       WHERE user_id = ANY($1::int[]) AND is_active = true AND from_email IS NOT NULL`,
+      [req.teamUserIds!]
     );
-    
+
     const warmupStatuses = await Promise.all(
       providers.rows.map(async (row: any) => {
         const schedule = await warmupService.getWarmupSchedule(userId, row.domain, row.provider);
@@ -320,10 +320,10 @@ router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next:
         SUBSTRING(from_email FROM '@(.*)$')::text as domain,
         provider
        FROM provider_configs
-       WHERE user_id = $1 AND is_active = true AND from_email IS NOT NULL`,
-      [userId]
+       WHERE user_id = ANY($1::int[]) AND is_active = true AND from_email IS NOT NULL`,
+      [req.teamUserIds!]
     );
-    
+
     const warmupDetails = await Promise.all(
       providers.rows.map(async (row: any) => {
         const schedule = await warmupService.getWarmupSchedule(userId, row.domain, row.provider);
@@ -383,37 +383,37 @@ router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next:
         status,
         COUNT(*) as count
        FROM email_queue
-       WHERE user_id = $1
+       WHERE user_id = ANY($1::int[])
        GROUP BY status
        ORDER BY status`,
-      [userId]
+      [req.teamUserIds!]
     );
-    
+
     const statusCounts: Record<string, number> = {};
     emailStatus.rows.forEach((row: any) => {
       statusCounts[row.status] = parseInt(row.count || '0');
     });
-    
+
     // Get emails sent in last hour
     const lastHour = await pool.query(
       `SELECT COUNT(*) as count
        FROM email_queue
-       WHERE user_id = $1 
+       WHERE user_id = ANY($1::int[])
          AND status = 'sent'
          AND sent_at > NOW() - INTERVAL '1 hour'`,
-      [userId]
+      [req.teamUserIds!]
     );
-    
+
     const sentLastHour = parseInt(lastHour.rows[0]?.count || '0');
-    
+
     // Get emails sent today
     const today = await pool.query(
       `SELECT COUNT(*) as count
        FROM email_queue
-       WHERE user_id = $1 
+       WHERE user_id = ANY($1::int[])
          AND status = 'sent'
          AND DATE(sent_at) = CURRENT_DATE`,
-      [userId]
+      [req.teamUserIds!]
     );
     
     const sentToday = parseInt(today.rows[0]?.count || '0');
@@ -491,7 +491,6 @@ router.get('/sending/diagnostics', async (req: AuthRequest, res: Response, next:
  */
 router.get('/emails/diagnostics', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!;
     const { getEmailQueue, isEmailQueuePaused } = await import('../services/queues');
     
     // Check if queue is paused
@@ -506,52 +505,54 @@ router.get('/emails/diagnostics', async (req: AuthRequest, res: Response, next: 
       console.error('Could not get queue counts:', error);
     }
     
+    const teamUserIds = req.teamUserIds!;
+
     // Get email status breakdown from database
     const statusResult = await pool.query(
-      `SELECT 
+      `SELECT
         status,
         COUNT(*) as count
        FROM email_queue
-       WHERE user_id = $1
+       WHERE user_id = ANY($1::int[])
        GROUP BY status
        ORDER BY status`,
-      [userId]
+      [teamUserIds]
     );
-    
+
     const statusCounts: Record<string, number> = {};
     statusResult.rows.forEach((row: any) => {
       statusCounts[row.status] = parseInt(row.count || '0');
     });
-    
+
     // Get recent email activity (last hour)
     const recentActivity = await pool.query(
-      `SELECT 
+      `SELECT
         status,
         COUNT(*) as count
        FROM email_queue
-       WHERE user_id = $1 
+       WHERE user_id = ANY($1::int[])
          AND (sent_at > NOW() - INTERVAL '1 hour' OR created_at > NOW() - INTERVAL '1 hour')
        GROUP BY status`,
-      [userId]
+      [teamUserIds]
     );
-    
+
     const recentCounts: Record<string, number> = {};
     recentActivity.rows.forEach((row: any) => {
       recentCounts[row.status] = parseInt(row.count || '0');
     });
-    
+
     // Get campaigns in sending state
     const sendingCampaigns = await pool.query(
-      `SELECT 
+      `SELECT
         id,
         name,
         status,
         created_at,
         updated_at
        FROM campaigns
-       WHERE user_id = $1 AND status = 'sending'
+       WHERE user_id = ANY($1::int[]) AND status = 'sending'
        ORDER BY updated_at DESC`,
-      [userId]
+      [teamUserIds]
     );
     
     res.json({
@@ -579,30 +580,30 @@ router.get('/emails/diagnostics', async (req: AuthRequest, res: Response, next: 
  */
 router.get('/emails/pending', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!;
-    
+    const teamUserIds = req.teamUserIds!;
+
     // Check for pending/queued/sending emails in database
     const result = await pool.query(
-      `SELECT 
+      `SELECT
         status,
         COUNT(*) as count
        FROM email_queue
-       WHERE user_id = $1 AND status IN ('pending', 'queued', 'sending')
+       WHERE user_id = ANY($1::int[]) AND status IN ('pending', 'queued', 'sending')
        GROUP BY status`,
-      [userId]
+      [teamUserIds]
     );
-    
+
     // Also check for campaigns that are in "sending" status
     const campaignsResult = await pool.query(
-      `SELECT 
+      `SELECT
         id,
         name,
         status,
         created_at
        FROM campaigns
-       WHERE user_id = $1 AND status = 'sending'
+       WHERE user_id = ANY($1::int[]) AND status = 'sending'
        ORDER BY created_at DESC`,
-      [userId]
+      [teamUserIds]
     );
     
     const counts: Record<string, number> = {};

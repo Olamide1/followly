@@ -32,6 +32,12 @@ const router = createRouter({
       meta: { requiresAuth: false },
     },
     {
+      path: '/accept-invite',
+      name: 'accept-invite',
+      component: () => import('@/views/AcceptInvite.vue'),
+      meta: { requiresAuth: false },
+    },
+    {
       path: '/unsubscribe',
       name: 'unsubscribe',
       component: () => import('@/views/Unsubscribe.vue'),
@@ -123,6 +129,11 @@ const router = createRouter({
           path: 'settings',
           name: 'settings',
           component: () => import('@/views/Settings.vue'),
+        },
+        {
+          path: 'team',
+          name: 'team',
+          component: () => import('@/views/Team.vue'),
         },
       ],
     },

@@ -12,7 +12,7 @@ router.use(authenticateToken);
 router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
-    const contact = await service.createContact(req.userId!, req.body);
+    const contact = await service.createContact(req.userId!, req.body, req.teamUserIds!);
     res.status(201).json({ contact });
   } catch (error: any) {
     next(error);
@@ -24,7 +24,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
     const searchParam = req.query.search as string;
-    const result = await service.listContacts(req.userId!, {
+    const result = await service.listContacts(req.teamUserIds!, {
       page: parseInt(req.query.page as string) || 1,
       limit: parseInt(req.query.limit as string) || 50,
       search: searchParam && searchParam.trim() ? searchParam.trim() : undefined,
@@ -61,7 +61,7 @@ router.post('/lists/batch', async (req: AuthRequest, res: Response, next: NextFu
     }
 
     const service = new ContactService();
-    const listsByContact = await service.getContactListsBatch(req.userId!, parsedContactIds);
+    const listsByContact = await service.getContactListsBatch(req.teamUserIds!, parsedContactIds);
     res.json({ listsByContact });
   } catch (error: any) {
     next(error);
@@ -72,7 +72,7 @@ router.post('/lists/batch', async (req: AuthRequest, res: Response, next: NextFu
 router.get('/:id/lists', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
-    const lists = await service.getContactLists(req.userId!, parseInt(req.params.id));
+    const lists = await service.getContactLists(req.teamUserIds!, parseInt(req.params.id));
     res.json({ lists });
   } catch (error: any) {
     next(error);
@@ -83,7 +83,7 @@ router.get('/:id/lists', async (req: AuthRequest, res: Response, next: NextFunct
 router.get('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
-    const contact = await service.getContact(req.userId!, parseInt(req.params.id));
+    const contact = await service.getContact(req.teamUserIds!, parseInt(req.params.id));
     res.json({ contact });
   } catch (error: any) {
     next(error);
@@ -94,7 +94,7 @@ router.get('/:id', async (req: AuthRequest, res: Response, next: NextFunction) =
 router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
-    const contact = await service.updateContact(req.userId!, parseInt(req.params.id), req.body);
+    const contact = await service.updateContact(req.teamUserIds!, parseInt(req.params.id), req.body);
     res.json({ contact });
   } catch (error: any) {
     next(error);
@@ -112,7 +112,7 @@ router.post('/bulk-delete', async (req: AuthRequest, res: Response, next: NextFu
 
     const service = new ContactService();
     const result = await service.deleteContacts(
-      req.userId!,
+      req.teamUserIds!,
       contactIds.map((id: any) => parseInt(id))
     );
     
@@ -126,7 +126,7 @@ router.post('/bulk-delete', async (req: AuthRequest, res: Response, next: NextFu
 router.delete('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
-    await service.deleteContact(req.userId!, parseInt(req.params.id));
+    await service.deleteContact(req.teamUserIds!, parseInt(req.params.id));
     res.json({ success: true });
   } catch (error: any) {
     next(error);
@@ -324,7 +324,7 @@ router.post('/import', async (req: AuthRequest, res: Response, next: NextFunctio
     }
 
     const service = new ContactService();
-    const result = await service.importContacts(req.userId!, contacts);
+    const result = await service.importContacts(req.userId!, contacts, req.teamUserIds!);
 
     res.json(result);
   } catch (error: any) {
@@ -336,7 +336,7 @@ router.post('/import', async (req: AuthRequest, res: Response, next: NextFunctio
 router.get('/export/csv', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ContactService();
-    const result = await service.listContacts(req.userId!, { limit: 10000 });
+    const result = await service.listContacts(req.teamUserIds!, { limit: 10000 });
 
     const csv = stringify(result.contacts, {
       header: true,

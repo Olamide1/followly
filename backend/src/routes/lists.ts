@@ -23,7 +23,7 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
 router.get('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ListService();
-    const list = await service.getList(req.userId!, parseInt(req.params.id));
+    const list = await service.getList(req.teamUserIds!, parseInt(req.params.id));
     res.json({ list });
   } catch (error: any) {
     next(error);
@@ -34,7 +34,7 @@ router.get('/:id', async (req: AuthRequest, res: Response, next: NextFunction) =
 router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ListService();
-    const lists = await service.listLists(req.userId!);
+    const lists = await service.listLists(req.teamUserIds!);
     res.json({ lists });
   } catch (error: any) {
     next(error);
@@ -45,7 +45,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
 router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ListService();
-    const list = await service.updateList(req.userId!, parseInt(req.params.id), req.body);
+    const list = await service.updateList(req.teamUserIds!, parseInt(req.params.id), req.body);
     res.json({ list });
   } catch (error: any) {
     next(error);
@@ -56,7 +56,7 @@ router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) =
 router.delete('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ListService();
-    await service.deleteList(req.userId!, parseInt(req.params.id));
+    await service.deleteList(req.teamUserIds!, parseInt(req.params.id));
     res.json({ success: true });
   } catch (error: any) {
     next(error);
@@ -95,7 +95,7 @@ router.post('/:id/contacts/bulk', async (req: AuthRequest, res: Response, next: 
 
     const service = new ListService();
     const result = await service.addContactsToList(
-      req.userId!,
+      req.teamUserIds!,
       listId,
       parsedContactIds
     );
@@ -123,7 +123,7 @@ router.post('/:id/contacts/preview', async (req: AuthRequest, res: Response, nex
 
     const service = new ListService();
     const result = await service.previewListContacts(
-      req.userId!,
+      req.teamUserIds!,
       listId,
       rules,
       {
@@ -208,7 +208,7 @@ router.post('/:id/contacts/import', async (req: AuthRequest, res: Response, next
     // Validate list exists and belongs to user before queuing
     const service = new ListService();
     try {
-      const list = await service.getList(req.userId!, listId);
+      const list = await service.getList(req.teamUserIds!, listId);
       if (list.type === 'smart') {
         throw createError('Cannot manually add contacts to smart lists', 400);
       }
@@ -224,6 +224,7 @@ router.post('/:id/contacts/import', async (req: AuthRequest, res: Response, next
     const contactImportQueue = getContactImportQueue();
     const job = await contactImportQueue.add({
       userId: req.userId!,
+      teamUserIds: req.teamUserIds!,
       listId,
       contacts,
       columnMapping,
@@ -259,7 +260,7 @@ router.post('/:id/contacts/:contactId', async (req: AuthRequest, res: Response, 
 
     const service = new ListService();
     await service.addContactToList(
-      req.userId!,
+      req.teamUserIds!,
       listId,
       contactId
     );
@@ -274,7 +275,7 @@ router.delete('/:id/contacts/:contactId', async (req: AuthRequest, res: Response
   try {
     const service = new ListService();
     await service.removeContactFromList(
-      req.userId!,
+      req.teamUserIds!,
       parseInt(req.params.id),
       parseInt(req.params.contactId)
     );
@@ -288,7 +289,7 @@ router.delete('/:id/contacts/:contactId', async (req: AuthRequest, res: Response
 router.get('/:id/contacts', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const service = new ListService();
-    const result = await service.getListContacts(req.userId!, parseInt(req.params.id), {
+    const result = await service.getListContacts(req.teamUserIds!, parseInt(req.params.id), {
       page: parseInt(req.query.page as string) || 1,
       limit: parseInt(req.query.limit as string) || 50,
     });

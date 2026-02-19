@@ -72,8 +72,8 @@ router.post('/unsubscribe', async (req: Request, res: Response, next: NextFuncti
 router.get('/suppression', authenticateToken, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
-      'SELECT email, reason, created_at FROM suppression_list WHERE user_id = $1 ORDER BY created_at DESC',
-      [req.userId]
+      'SELECT email, reason, created_at FROM suppression_list WHERE user_id = ANY($1::int[]) ORDER BY created_at DESC',
+      [req.teamUserIds!]
     );
     res.json({ suppressions: result.rows });
   } catch (error: any) {
@@ -85,8 +85,8 @@ router.get('/suppression', authenticateToken, async (req: AuthRequest, res: Resp
 router.delete('/suppression/:email', authenticateToken, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     await pool.query(
-      'DELETE FROM suppression_list WHERE user_id = $1 AND email = $2',
-      [req.userId, req.params.email]
+      'DELETE FROM suppression_list WHERE user_id = ANY($1::int[]) AND email = $2',
+      [req.teamUserIds!, req.params.email]
     );
     res.json({ success: true });
   } catch (error: any) {

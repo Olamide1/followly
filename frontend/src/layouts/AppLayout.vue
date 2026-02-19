@@ -97,6 +97,7 @@ const navigation = [
   // { name: 'Automations', to: '/app/automations' }, // DISABLED: Temporarily commented out
   { name: 'Analytics', to: '/app/analytics' },
   { name: 'Settings', to: '/app/settings' },
+  { name: 'Team', to: '/app/team' },
 ]
 
 function isActiveRoute(routePath: string): boolean {

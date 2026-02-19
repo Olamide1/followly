@@ -24,6 +24,7 @@ import complianceRoutes from './routes/compliance';
 import webhookRoutes from './routes/webhooks';
 import trackingRoutes from './routes/tracking';
 import adminRoutes from './routes/admin';
+import teamRoutes from './routes/team';
 
 const app = express();
 const httpServer = createServer(app);
@@ -79,6 +80,7 @@ app.use('/api/compliance', complianceRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/tracking', trackingRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/team', teamRoutes);
 
 // Serve frontend static files in production
 if (isProduction) {

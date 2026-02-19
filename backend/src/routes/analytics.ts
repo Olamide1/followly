@@ -8,53 +8,46 @@ router.use(authenticateToken);
 // Get dashboard stats
 router.get('/dashboard', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!;
+    const teamUserIds = req.teamUserIds!;
 
     // Total contacts
     const contactsResult = await pool.query(
-      'SELECT COUNT(*) FROM contacts WHERE user_id = $1',
-      [userId]
+      'SELECT COUNT(*) FROM contacts WHERE user_id = ANY($1::int[])',
+      [teamUserIds]
     );
     const totalContacts = parseInt(contactsResult.rows[0].count);
 
     // Total campaigns
     const campaignsResult = await pool.query(
-      'SELECT COUNT(*) FROM campaigns WHERE user_id = $1',
-      [userId]
+      'SELECT COUNT(*) FROM campaigns WHERE user_id = ANY($1::int[])',
+      [teamUserIds]
     );
     const totalCampaigns = parseInt(campaignsResult.rows[0].count);
 
-    // Total automations - DISABLED: Temporarily commented out
-    // const automationsResult = await pool.query(
-    //   'SELECT COUNT(*) FROM automations WHERE user_id = $1',
-    //   [userId]
-    // );
-    // const totalAutomations = parseInt(automationsResult.rows[0].count);
     const totalAutomations = 0; // DISABLED: Set to 0 while automations are disabled
 
     // Email stats (last 30 days) - using email_queue for sent count, email_events for engagement
     const emailQueueResult = await pool.query(
       `SELECT COUNT(*) as sent
        FROM email_queue
-       WHERE user_id = $1
+       WHERE user_id = ANY($1::int[])
        AND status = 'sent'
        AND sent_at >= NOW() - INTERVAL '30 days'`,
-      [userId]
+      [teamUserIds]
     );
     const sent = parseInt(emailQueueResult.rows[0]?.sent || '0');
 
-    // Improved query: join with email_queue to ensure we only count events for this user's emails
-    // Count distinct email_queue_ids to get unique opens/clicks per email (not per event)
+    // Improved query: join with email_queue to ensure we only count events for this user's/team's emails
     const emailStatsResult = await pool.query(
-      `SELECT 
+      `SELECT
         COUNT(DISTINCT CASE WHEN e.event_type = 'delivered' THEN e.email_queue_id END) as delivered,
         COUNT(DISTINCT CASE WHEN e.event_type = 'opened' THEN e.email_queue_id END) as opened,
         COUNT(DISTINCT CASE WHEN e.event_type = 'clicked' THEN e.email_queue_id END) as clicked
        FROM email_events e
        INNER JOIN email_queue eq ON e.email_queue_id = eq.id
-       WHERE eq.user_id = $1
+       WHERE eq.user_id = ANY($1::int[])
        AND e.occurred_at >= NOW() - INTERVAL '30 days'`,
-      [userId]
+      [teamUserIds]
     );
 
     const emailStats = emailStatsResult.rows[0] || {};

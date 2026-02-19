@@ -3,6 +3,7 @@ import { CampaignService } from '../services/campaigns';
 import { RoutingService } from '../services/routing';
 import { EmailProviderService } from '../services/providers';
 import { WarmupService } from '../services/warmup';
+import { resolveTeamUserIds } from '../services/team';
 
 /**
  * Process campaign send job
@@ -18,6 +19,14 @@ export async function processCampaignSendQueue(job: Job) {
 
   console.log(`[Campaign Send Worker] Processing campaign ${campaignId} for user ${userId}`);
 
+  // Resolve team user IDs for shared data access
+  let teamUserIds: number[];
+  try {
+    teamUserIds = await resolveTeamUserIds(userId);
+  } catch {
+    teamUserIds = [userId];
+  }
+
   // Initialize services
   const routingService = new RoutingService(new EmailProviderService());
   const emailProviderService = new EmailProviderService();
@@ -29,7 +38,7 @@ export async function processCampaignSendQueue(job: Job) {
   );
 
   // Process the campaign send (this will queue individual emails)
-  const result = await campaignService.sendCampaign(userId, campaignId);
+  const result = await campaignService.sendCampaign(userId, teamUserIds, campaignId);
 
   console.log(`[Campaign Send Worker] Campaign ${campaignId} processed: ${result.queued} emails queued`);
 

@@ -30,7 +30,7 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
 // Get campaign
 router.get('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const campaign = await campaignService.getCampaign(req.userId!, parseInt(req.params.id));
+    const campaign = await campaignService.getCampaign(req.teamUserIds!, parseInt(req.params.id));
     res.json({ campaign });
   } catch (error: any) {
     next(error);
@@ -40,7 +40,7 @@ router.get('/:id', async (req: AuthRequest, res: Response, next: NextFunction) =
 // List campaigns
 router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const result = await campaignService.listCampaigns(req.userId!, {
+    const result = await campaignService.listCampaigns(req.teamUserIds!, {
       type: req.query.type as 'broadcast' | 'lifecycle',
       status: req.query.status as string,
       search: req.query.search as string,
@@ -56,7 +56,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
 // Update campaign
 router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const campaign = await campaignService.updateCampaign(req.userId!, parseInt(req.params.id), req.body);
+    const campaign = await campaignService.updateCampaign(req.teamUserIds!, parseInt(req.params.id), req.body);
     res.json({ campaign });
   } catch (error: any) {
     next(error);
@@ -66,7 +66,7 @@ router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) =
 // Delete campaign
 router.delete('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    await campaignService.deleteCampaign(req.userId!, parseInt(req.params.id));
+    await campaignService.deleteCampaign(req.teamUserIds!, parseInt(req.params.id));
     res.json({ success: true });
   } catch (error: any) {
     next(error);
@@ -79,8 +79,8 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
     const userId = req.userId!;
     const campaignId = parseInt(req.params.id);
 
-    // Validate campaign exists and belongs to user before queuing
-    const campaign = await campaignService.getCampaign(userId, campaignId);
+    // Validate campaign exists and belongs to user/team before queuing
+    const campaign = await campaignService.getCampaign(req.teamUserIds!, campaignId);
 
     // Check if campaign is already sent
     if (campaign.status === 'sent') {
@@ -120,7 +120,7 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
     let estimatedCount = 0;
     try {
       const listService = new (await import('../services/lists')).ListService();
-      const listContacts = await listService.getAllListContacts(userId, campaign.list_id);
+      const listContacts = await listService.getAllListContacts(req.teamUserIds!, campaign.list_id);
       estimatedCount = listContacts.length;
     } catch (error: any) {
       // If we can't get count, continue anyway - worker will handle it
@@ -285,7 +285,7 @@ router.post('/:id/send', async (req: AuthRequest, res: Response, next: NextFunct
 // Get campaign stats
 router.get('/:id/stats', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const stats = await campaignService.getCampaignStats(req.userId!, parseInt(req.params.id));
+    const stats = await campaignService.getCampaignStats(req.teamUserIds!, parseInt(req.params.id));
     res.json({ stats });
   } catch (error: any) {
     next(error);
@@ -296,7 +296,7 @@ router.get('/:id/stats', async (req: AuthRequest, res: Response, next: NextFunct
 router.get('/:id/verify-delivery', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const verification = await campaignService.verifyCampaignDelivery(
-      req.userId!,
+      req.teamUserIds!,
       parseInt(req.params.id)
     );
     res.json(verification);
@@ -308,26 +308,27 @@ router.get('/:id/verify-delivery', async (req: AuthRequest, res: Response, next:
 // Get individual email statuses for a campaign
 router.get('/:id/emails', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!;
     const campaignId = parseInt(req.params.id);
     const limit = parseInt(req.query.limit as string) || 100;
     const offset = parseInt(req.query.offset as string) || 0;
     const status = req.query.status as string; // Optional filter by status
     
-    // Verify campaign belongs to user
+    const teamUserIds = req.teamUserIds!;
+
+    // Verify campaign belongs to user/team
     const campaignCheck = await pool.query(
-      'SELECT id FROM campaigns WHERE id = $1 AND user_id = $2',
-      [campaignId, userId]
+      'SELECT id FROM campaigns WHERE id = $1 AND user_id = ANY($2::int[])',
+      [campaignId, teamUserIds]
     );
-    
+
     if (campaignCheck.rows.length === 0) {
       res.status(404).json({ error: 'Campaign not found' });
       return;
     }
-    
+
     // Build query
     let query = `
-      SELECT 
+      SELECT
         eq.id,
         eq.to_email,
         eq.status,
@@ -341,9 +342,9 @@ router.get('/:id/emails', async (req: AuthRequest, res: Response, next: NextFunc
         c.email as contact_email
       FROM email_queue eq
       LEFT JOIN contacts c ON eq.contact_id = c.id
-      WHERE eq.campaign_id = $1 AND eq.user_id = $2
+      WHERE eq.campaign_id = $1 AND eq.user_id = ANY($2::int[])
     `;
-    const params: any[] = [campaignId, userId];
+    const params: any[] = [campaignId, teamUserIds];
     
     if (status) {
       query += ` AND eq.status = $3`;
@@ -359,9 +360,9 @@ router.get('/:id/emails', async (req: AuthRequest, res: Response, next: NextFunc
     let countQuery = `
       SELECT COUNT(*) as total
       FROM email_queue
-      WHERE campaign_id = $1 AND user_id = $2
+      WHERE campaign_id = $1 AND user_id = ANY($2::int[])
     `;
-    const countParams: any[] = [campaignId, userId];
+    const countParams: any[] = [campaignId, teamUserIds];
     
     if (status) {
       countQuery += ` AND status = $3`;
@@ -373,13 +374,13 @@ router.get('/:id/emails', async (req: AuthRequest, res: Response, next: NextFunc
     
     // Get status breakdown
     const statusBreakdown = await pool.query(
-      `SELECT 
+      `SELECT
         status,
         COUNT(*) as count
        FROM email_queue
-       WHERE campaign_id = $1 AND user_id = $2
+       WHERE campaign_id = $1 AND user_id = ANY($2::int[])
        GROUP BY status`,
-      [campaignId, userId]
+      [campaignId, teamUserIds]
     );
     
     const statusCounts: Record<string, number> = {};
@@ -402,7 +403,7 @@ router.get('/:id/emails', async (req: AuthRequest, res: Response, next: NextFunc
 // Recover campaign emails (re-queue failed or missing emails)
 router.post('/:id/recover', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const result = await campaignService.recoverCampaignEmails(req.userId!, parseInt(req.params.id));
+    const result = await campaignService.recoverCampaignEmails(req.userId!, req.teamUserIds!, parseInt(req.params.id));
     res.json(result);
   } catch (error: any) {
     next(error);
@@ -416,10 +417,10 @@ router.post('/:id/reset', async (req: AuthRequest, res: Response, next: NextFunc
     const campaignId = parseInt(req.params.id);
     const { pool } = await import('../database/connection');
     
-    // Verify campaign belongs to user
+    // Verify campaign belongs to user/team
     const campaign = await pool.query(
-      'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
-      [campaignId, userId]
+      'SELECT * FROM campaigns WHERE id = $1 AND user_id = ANY($2::int[])',
+      [campaignId, req.teamUserIds!]
     );
     
     if (campaign.rows.length === 0) {
@@ -481,10 +482,10 @@ router.post('/test-send', async (req: AuthRequest, res: Response, next: NextFunc
       return res.status(400).json({ error: 'Missing required fields: to, subject, content' });
     }
 
-    // Load user's providers
+    // Load user's/team's providers
     const userProviders = await pool.query(
-      'SELECT * FROM provider_configs WHERE user_id = $1 AND is_active = true ORDER BY is_default DESC LIMIT 1',
-      [req.userId]
+      'SELECT * FROM provider_configs WHERE user_id = ANY($1::int[]) AND is_active = true ORDER BY is_default DESC LIMIT 1',
+      [req.teamUserIds!]
     );
 
     if (userProviders.rows.length === 0) {

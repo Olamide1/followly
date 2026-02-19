@@ -71,12 +71,13 @@ export class RoutingService {
     };
   }
 
-  private async getUserProviders(userId: number) {
+  private async getUserProviders(userIds: number | number[]) {
+    const ids = Array.isArray(userIds) ? userIds : [userIds];
     const result = await pool.query(
-      'SELECT * FROM provider_configs WHERE user_id = $1 ORDER BY is_default DESC, created_at ASC',
-      [userId]
+      'SELECT * FROM provider_configs WHERE user_id = ANY($1::int[]) ORDER BY is_default DESC, created_at ASC',
+      [ids]
     );
-    console.log(`Database providers for user ${userId}:`, result.rows.map((r: any) => ({ provider: r.provider, is_active: r.is_active, is_default: r.is_default })));
+    console.log(`Database providers for users ${ids}:`, result.rows.map((r: any) => ({ provider: r.provider, is_active: r.is_active, is_default: r.is_default })));
     return result.rows;
   }
 
