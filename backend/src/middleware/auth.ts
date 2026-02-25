@@ -24,12 +24,12 @@ export async function authenticateToken(
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    throw createError('Authentication token required', 401);
+    return next(createError('Authentication token required', 401));
   }
 
   const secret = process.env.JWT_SECRET;
   if (!secret) {
-    throw createError('JWT secret not configured', 500);
+    return next(createError('JWT secret not configured', 500));
   }
 
   try {
@@ -61,6 +61,6 @@ export async function authenticateToken(
 
     next();
   } catch (error) {
-    throw createError('Invalid or expired token', 401);
+    return next(createError('Invalid or expired token', 401));
   }
 }
