@@ -9,6 +9,16 @@
       <p class="text-ink-500 text-sm tracking-wider">LOADING...</p>
     </div>
 
+    <div v-else-if="error" class="text-center py-24">
+      <div class="max-w-md mx-auto">
+        <div class="border-l-2 border-red-500 pl-6 mb-8 text-left">
+          <h3 class="text-sm font-normal text-red-500 uppercase tracking-wider mb-4">Failed to Load Dashboard</h3>
+          <p class="text-ink-700 leading-relaxed">{{ error }}</p>
+          <button @click="loadDashboard" class="btn btn-secondary mt-4">Try Again</button>
+        </div>
+      </div>
+    </div>
+
     <div v-else-if="stats && (stats.contacts?.total > 0 || stats.campaigns?.total > 0 || stats.emails?.sent > 0)">
       <!-- Stats grid - Agnes Martin style, mobile responsive -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8 mb-12 sm:mb-16">
@@ -103,21 +113,25 @@ import api from '@/services/api'
 
 const stats = ref<any>(null)
 const loading = ref(true)
-
 const error = ref<string | null>(null)
 
-onMounted(async () => {
+const loadDashboard = async () => {
   try {
+    loading.value = true
+    error.value = null
     const response = await api.get('/analytics/dashboard')
     stats.value = response.data
-    error.value = null
   } catch (err: any) {
     console.error('Failed to load dashboard stats:', err)
-    error.value = err.response?.data?.error || 'Failed to load dashboard'
+    error.value = err.response?.data?.error || err.message || 'Failed to load dashboard'
     stats.value = null
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  loadDashboard()
 })
 </script>
 

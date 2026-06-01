@@ -60,6 +60,12 @@ export const useAuthStore = defineStore('auth', () => {
       setToken(response.data.token)
       token.value = response.data.token
       user.value = response.data.user
+      // Fetch full user profile to ensure team_role and team_id are populated
+      try {
+        await fetchUser()
+      } catch {
+        // Non-fatal: user from login response is still usable
+      }
     }
     return response.data
   }
@@ -70,6 +76,11 @@ export const useAuthStore = defineStore('auth', () => {
       setToken(response.data.token)
       token.value = response.data.token
       user.value = response.data.user
+      try {
+        await fetchUser()
+      } catch {
+        // Non-fatal: user from register response is still usable
+      }
     }
     return response.data
   }

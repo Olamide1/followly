@@ -35,7 +35,7 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
     const result = await pool.query(
       `INSERT INTO users (email, password_hash, name, company)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, email, name, company, created_at`,
+       RETURNING id, email, name, company, team_id, team_role, created_at`,
       [email.toLowerCase(), passwordHash, name, company]
     );
 
@@ -61,6 +61,8 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
         email: user.email,
         name: user.name,
         company: user.company,
+        team_id: user.team_id,
+        team_role: user.team_role,
       },
       token,
     });
@@ -80,7 +82,7 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
 
     // Find user
     const result = await pool.query(
-      'SELECT id, email, password_hash, name, company FROM users WHERE email = $1',
+      'SELECT id, email, password_hash, name, company, team_id, team_role FROM users WHERE email = $1',
       [email.toLowerCase()]
     );
 
@@ -116,6 +118,8 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
         email: user.email,
         name: user.name,
         company: user.company,
+        team_id: user.team_id,
+        team_role: user.team_role,
       },
       token,
     });
@@ -235,6 +239,8 @@ router.post('/accept-invite', async (req: Request, res: Response, next: NextFunc
         email: user.email,
         name: user.name,
         company: user.company,
+        team_id: user.team_id,
+        team_role: user.team_role,
       },
       token: jwtToken,
     });

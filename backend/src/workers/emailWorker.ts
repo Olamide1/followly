@@ -899,6 +899,17 @@ export async function processEmailQueue(job: Job) {
       [finalEmailQueueId, contactId, campaignId, result.messageId]
     );
 
+    // For nodemailer (cPanel/SMTP), SMTP 250 OK is the only delivery confirmation available.
+    // Record a 'delivered' event so delivery rate appears in analytics.
+    if (routingDecision.provider === 'nodemailer') {
+      await pool.query(
+        `INSERT INTO email_events (email_queue_id, contact_id, campaign_id, event_type, provider_event_id)
+         VALUES ($1, $2, $3, 'delivered', $4)
+         ON CONFLICT DO NOTHING`,
+        [finalEmailQueueId, contactId, campaignId, result.messageId]
+      );
+    }
+
     // Record provider usage
     await userRoutingService.recordProviderUsage(userId, routingDecision.provider, true);
 

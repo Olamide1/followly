@@ -903,7 +903,7 @@
             </div>
 
           <!-- Per-recipient domain throttle status -->
-          <div v-if="sendingDiagnostics.recipientThrottle && sendingDiagnostics.recipientThrottle.length > 0" class="mt-4 pt-4 border-t border-grid-light">
+          <div v-if="sendingDiagnostics && sendingDiagnostics.recipientThrottle && sendingDiagnostics.recipientThrottle.length > 0" class="mt-4 pt-4 border-t border-grid-light">
             <p class="text-xs text-ink-500 uppercase tracking-wider mb-2">Recipient Domain Throttle (this hour)</p>
             <div class="flex flex-wrap gap-3">
               <div

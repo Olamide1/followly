@@ -27,6 +27,16 @@
       <p class="text-ink-500 text-sm tracking-wider">LOADING...</p>
     </div>
 
+    <div v-else-if="error" class="text-center py-24">
+      <div class="max-w-md mx-auto">
+        <div class="border-l-2 border-red-500 pl-6 mb-8 text-left">
+          <h3 class="text-sm font-normal text-red-500 uppercase tracking-wider mb-4">Failed to Load Analytics</h3>
+          <p class="text-ink-700 leading-relaxed">{{ error }}</p>
+          <button @click="refreshAnalytics" class="btn btn-secondary mt-4">Try Again</button>
+        </div>
+      </div>
+    </div>
+
     <div v-else-if="stats && (stats.emails?.sent > 0 || stats.emails?.delivered > 0)" class="space-y-6">
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8">
         <div class="stat-card">
@@ -89,14 +99,18 @@ import api from '@/services/api'
 
 const stats = ref<any>(null)
 const loading = ref(true)
+const error = ref<string | null>(null)
 
 const loadAnalytics = async () => {
   try {
     loading.value = true
+    error.value = null
     const response = await api.get('/analytics/dashboard')
     stats.value = response.data
-  } catch (error) {
-    console.error('Failed to load analytics:', error)
+  } catch (err: any) {
+    console.error('Failed to load analytics:', err)
+    error.value = err.response?.data?.error || err.message || 'Failed to load analytics data'
+    stats.value = null
   } finally {
     loading.value = false
   }

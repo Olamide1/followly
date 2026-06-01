@@ -329,7 +329,7 @@ export class TeamService {
       );
 
       const userResult = await pool.query(
-        'SELECT id, email, name, company FROM users WHERE id = $1',
+        'SELECT id, email, name, company, team_id, team_role FROM users WHERE id = $1',
         [existingUser.rows[0].id]
       );
       user = userResult.rows[0];
@@ -344,7 +344,7 @@ export class TeamService {
       const newUser = await pool.query(
         `INSERT INTO users (email, password_hash, name, team_id, team_role)
          VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, email, name, company`,
+         RETURNING id, email, name, company, team_id, team_role`,
         [invite.email, passwordHash, name, invite.team_id, 'member']
       );
 
