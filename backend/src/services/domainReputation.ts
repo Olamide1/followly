@@ -189,8 +189,8 @@ export class DomainReputationService {
            total_opened = $9,
            total_clicked = $10,
            last_calculated_at = CURRENT_TIMESTAMP,
-           paused_at = CASE WHEN $2 = 'paused' AND paused_at IS NULL THEN CURRENT_TIMESTAMP ELSE paused_at END,
-           paused_reason = CASE WHEN $2 = 'paused' THEN $11 ELSE NULL END,
+           paused_at = CASE WHEN $2::text = 'paused' AND paused_at IS NULL THEN CURRENT_TIMESTAMP::timestamp ELSE paused_at END,
+           paused_reason = CASE WHEN $2::text = 'paused' THEN $11::text ELSE NULL END,
            updated_at = CURRENT_TIMESTAMP
        WHERE user_id = $12 AND domain = $13
        RETURNING *`,
@@ -218,7 +218,7 @@ export class DomainReputationService {
          (user_id, domain, reputation_score, status, bounce_rate, complaint_rate, engagement_rate,
           total_sent, total_bounced, total_complained, total_opened, total_clicked, paused_reason, paused_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 
-                 CASE WHEN $4 = 'paused' THEN CURRENT_TIMESTAMP ELSE NULL END)
+                 CASE WHEN $4::text = 'paused' THEN CURRENT_TIMESTAMP::timestamp ELSE NULL END)
          RETURNING *`,
           [
             userId,
