@@ -26,18 +26,17 @@ router.get('/dashboard', async (req: AuthRequest, res: Response, next: NextFunct
 
     const totalAutomations = 0; // DISABLED: Set to 0 while automations are disabled
 
-    // Email stats (last 30 days) - using email_queue for sent count, email_events for engagement
+    // Email stats (all-time) - using email_queue for sent count, email_events for engagement
     const emailQueueResult = await pool.query(
       `SELECT COUNT(*) as sent
        FROM email_queue
        WHERE user_id = ANY($1::int[])
-       AND status = 'sent'
-       AND sent_at >= NOW() - INTERVAL '30 days'`,
+       AND status = 'sent'`,
       [teamUserIds]
     );
     const sent = parseInt(emailQueueResult.rows[0]?.sent || '0');
 
-    // Improved query: join with email_queue to ensure we only count events for this user's/team's emails
+    // Count engagement events for the same cohort of sent emails (all-time)
     const emailStatsResult = await pool.query(
       `SELECT
         COUNT(DISTINCT CASE WHEN e.event_type = 'delivered' THEN e.email_queue_id END) as delivered,
@@ -46,7 +45,7 @@ router.get('/dashboard', async (req: AuthRequest, res: Response, next: NextFunct
        FROM email_events e
        INNER JOIN email_queue eq ON e.email_queue_id = eq.id
        WHERE eq.user_id = ANY($1::int[])
-       AND e.occurred_at >= NOW() - INTERVAL '30 days'`,
+       AND eq.status = 'sent'`,
       [teamUserIds]
     );
 

@@ -39,7 +39,7 @@
         </div> -->
         
         <div class="stat-card">
-          <div class="stat-label">Emails Sent (30d)</div>
+          <div class="stat-label">Emails Sent</div>
           <div class="stat-value">{{ stats?.emails?.sent || 0 }}</div>
         </div>
       </div>
